@@ -25,8 +25,6 @@ class TokenType(enum.Enum):
     LCBRACKET = re.compile(r"{")
     RCBRACKET = re.compile(r"}")
     PERCENT = re.compile(r"%")
-    LANGLE_MARK = re.compile(r"<")
-    RANGLE_MARK = re.compile(r">")
     CODE_SECTION = enum.auto()
     COLON = re.compile(r":")
     STRING = re.compile(r"(?<!\\)\".*?(?<!\\)\"")
@@ -325,10 +323,7 @@ class Parser:
         with self.manager:
             self.match(TokenType.PERCENT)
             if self.match(TokenType.IDENTIFIER) == "type":
-                self.match(TokenType.LANGLE_MARK)
-                type_name = self.match(TokenType.IDENTIFIER)
-                self.match(TokenType.RANGLE_MARK)
-                return RuleTypeNode(type_name)
+                return RuleTypeNode(self.match(TokenType.STRING)[1:-1])
         raise ParsingFail
 
     def root_rule_statement(self):
