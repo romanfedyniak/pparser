@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, field
 import argparse
 import typing
 import enum
@@ -48,7 +49,7 @@ class Tokenizer:
     def __init__(self, file: typing.TextIO):
         self.filename = os.path.basename(file.name)
         self.src = file.read()
-        self.tokens = []
+        self.tokens: list[Token] = []
         self.pos = 0
 
     def tokenize(self) -> list[Token]:
@@ -192,71 +193,57 @@ class RootRuleNode(Node):
 
 
 @dataclass
-class ParsingExpressionRuleNameNode(Node):
+class ParsingExpressionContext:
+    name: str | None = None
+    lookahead: bool = False
+    lookahead_positive: bool | None = None
+    loop: bool = False
+    loop_nonempty: bool | None = None
+    optional: bool = False
+
+
+@dataclass(kw_only=True)
+class ParsingExpressionNode:
+    ctx: ParsingExpressionContext = field(default_factory=ParsingExpressionContext)
+
+
+@dataclass
+class ParsingExpressionRuleNameNode(ParsingExpressionNode):
     name: str
 
 
 @dataclass
-class ParsingExpressionStringNode(Node):
+class ParsingExpressionStringNode(ParsingExpressionNode):
     value: str
 
 
 @dataclass
-class ParsingExpressionNamedItemNode(Node):
-    name: str
-    item: Node
+class ParsingExpressionGroupNode(ParsingExpressionNode):
+    parsing_expression: list[list[ParsingExpressionNode]]
 
 
 @dataclass
-class ParsingExpressionLookaheadNode(Node):
-    positive: bool
-    atom: Node
+class ParsingExpressionCharacterClassNode(ParsingExpressionNode):
+    characters: str
 
 
 @dataclass
-class ParsingExpressionLoopNode(Node):
-    nonempty: bool
-    atom: Node
-
-
-@dataclass
-class ParsingExpressionOptionalNode(Node):
-    atom: Node
-
-
-@dataclass
-class ParsingExpressionGroupNode(Node):
-    parsing_expression: list[list[Node]]
-
-
-@dataclass
-class CharacterClassRangeNode(Node):
-    from_: str
-    to: str
-
-
-@dataclass
-class ParsingExpressionCharacterClassNode(Node):
-    characters: list[Node]
-
-
-@dataclass
-class ParsingExpressionNode(Node):
-    items: list[Node]
+class ParsingExpressionsNode(Node):
+    items: list[ParsingExpressionNode]
     action: str | None
 
 
 @dataclass
 class RuleNode(Node):
     name: str
-    parsing_expression: list[ParsingExpressionNode]
+    parsing_expression: list[ParsingExpressionsNode]
 
 
 class ParsingFail(Exception):
     pass
 
 
-class ParserManager:
+class ParserManager(AbstractContextManager):
     pos: int = 0
 
     def __init__(self, parser: "Parser"):
@@ -265,7 +252,7 @@ class ParserManager:
     def __enter__(self):
         self.pos = self.parser.mark()
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, type, value, traceback) -> bool:
         if type is not None:
             if type == ParsingFail:
                 self.parser.reset(self.pos)
@@ -354,31 +341,43 @@ class Parser:
         with self.manager:
             atom = self.parsing_expression_atom()
             self.match(TokenType.PLUS)
-            return ParsingExpressionLoopNode(True, atom)
+            atom.ctx.loop = True
+            atom.ctx.loop_nonempty = True
+            return atom
         with self.manager:
             atom = self.parsing_expression_atom()
             self.match(TokenType.STAR)
-            return ParsingExpressionLoopNode(False, atom)
+            atom.ctx.loop = True
+            atom.ctx.loop_nonempty = False
+            return atom
         with self.manager:
             atom = self.parsing_expression_atom()
             self.match(TokenType.QUESTION_MARK)
-            return ParsingExpressionOptionalNode(atom)
+            atom.ctx.optional = True
+            return atom
         with self.manager:
             return self.parsing_expression_atom()
         with self.manager:
             self.match(TokenType.AMPERSAND)
-            return ParsingExpressionLookaheadNode(True, self.parsing_expression_atom())
+            atom = self.parsing_expression_atom()
+            atom.ctx.lookahead = True
+            atom.ctx.lookahead_positive = True
+            return atom
         with self.manager:
             self.match(TokenType.EXCLAMATION_MARK)
-            return ParsingExpressionLookaheadNode(False, self.parsing_expression_atom())
+            atom = self.parsing_expression_atom()
+            atom.ctx.lookahead = True
+            atom.ctx.lookahead_positive = False
+            return atom
         raise ParsingFail
 
-    def parsing_expression_named_item_or_item(self) -> Node:
+    def parsing_expression_named_item_or_item(self) -> ParsingExpressionNode:
         with self.manager:
             id = self.match(TokenType.IDENTIFIER)
             self.match(TokenType.COLON)
             item = self.parsing_expression_item()
-            return ParsingExpressionNamedItemNode(id, item)
+            item.ctx.name = id
+            return item
         with self.manager:
             return self.parsing_expression_item()
         raise ParsingFail
@@ -395,7 +394,7 @@ class Parser:
         with self.manager:
             parsing_expression = self.parsing_expression_()
             action = self.optional(TokenType.ACTION)
-            return ParsingExpressionNode(parsing_expression, action)
+            return ParsingExpressionsNode(parsing_expression, action)
         raise ParsingFail
 
     def rule_statement(self):
@@ -420,6 +419,7 @@ class Parser:
         if self.pos < len(self.tokens):
             token = self.tokens[self.pos]
             return token
+        return None
 
     def match(self, token_type: TokenType) -> str:
         token = self.get_token()
