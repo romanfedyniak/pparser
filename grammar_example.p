@@ -1,6 +1,6 @@
 %name calc
 
-%header {
+%hpp {
     #include <node.h>
 }
 

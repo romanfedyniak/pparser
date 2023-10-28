@@ -65,7 +65,7 @@ class Tokenizer:
             # special token processing
             elif len(self.tokens) >= 2 and \
                     self.tokens[-2].type == TokenType.PERCENT and self.tokens[-1].type == TokenType.IDENTIFIER and \
-                    ((name := self.tokens[-1].value) == "cpp" or name == "header"):
+                    ((name := self.tokens[-1].value) == "cpp" or name == "hpp"):
                 start_pos = self.pos
 
                 while self.src[self.pos].isspace():
@@ -314,7 +314,7 @@ class Parser:
     def header_statement(self):
         with self.manager:
             self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "header":
+            if self.match(TokenType.IDENTIFIER) == "hpp":
                 return HeaderBlockNode(self.match(TokenType.CODE_SECTION))
         raise ParsingFail
 
