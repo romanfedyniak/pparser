@@ -1,17 +1,21 @@
 %name calc
 
+%header {
+    #include <node.h>
+}
+
 %cpp {
 
-#include "test.h"
+    #include "test.h"
 
-struct Node {
+    struct Node {
 
-}
+    }
 
 }
 
 # comment
-%type <Node>
+%type "Node"
 %root Expr
 
 Value = a:[0-9.]+ { $$ = a } | "(" Expr ")"

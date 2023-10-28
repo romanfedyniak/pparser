@@ -26,10 +26,11 @@ class TokenType(enum.Enum):
     LCBRACKET = re.compile(r"{")
     RCBRACKET = re.compile(r"}")
     PERCENT = re.compile(r"%")
-    CODE_SECTION = enum.auto()
     COLON = re.compile(r":")
     STRING = re.compile(r"(?<!\\)\".*?(?<!\\)\"")
     CHARACTER_CLASS = re.compile(r"(?<!\\)\[.*?(?<!\\)\]")
+    # special tokens
+    CODE_SECTION = enum.auto()
     ACTION = enum.auto()
 
     def __repr__(self):
@@ -62,9 +63,11 @@ class Tokenizer:
                 continue
 
             # special token processing
-            elif self.pos + 4 < len(self.src) and self.src[self.pos:self.pos+4] == "%cpp":
+            elif len(self.tokens) >= 2 and \
+                    self.tokens[-2].type == TokenType.PERCENT and self.tokens[-1].type == TokenType.IDENTIFIER and \
+                    ((name := self.tokens[-1].value) == "cpp" or name == "header"):
                 start_pos = self.pos
-                self.pos += 5
+
                 while self.src[self.pos].isspace():
                     self.pos += 1
 
@@ -178,6 +181,11 @@ class NameNode(Node):
 
 
 @dataclass
+class HeaderBlockNode(Node):
+    header: str
+
+
+@dataclass
 class CodeBlockNode(Node):
     code: str
 
@@ -285,6 +293,8 @@ class Parser:
         with self.manager:
             return self.name_statement()
         with self.manager:
+            return self.header_statement()
+        with self.manager:
             return self.code_statement()
         with self.manager:
             return self.rule_type_statement()
@@ -301,9 +311,18 @@ class Parser:
                 return NameNode(self.match(TokenType.IDENTIFIER))
         raise ParsingFail
 
+    def header_statement(self):
+        with self.manager:
+            self.match(TokenType.PERCENT)
+            if self.match(TokenType.IDENTIFIER) == "header":
+                return HeaderBlockNode(self.match(TokenType.CODE_SECTION))
+        raise ParsingFail
+
     def code_statement(self):
         with self.manager:
-            return CodeBlockNode(self.match(TokenType.CODE_SECTION))
+            self.match(TokenType.PERCENT)
+            if self.match(TokenType.IDENTIFIER) == "cpp":
+                return CodeBlockNode(self.match(TokenType.CODE_SECTION))
         raise ParsingFail
 
     def rule_type_statement(self):
