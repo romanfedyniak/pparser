@@ -551,8 +551,6 @@ class CodeGenerator:
             self.cpp_file,
             f"#include \"{self.parser_name}.hpp\"",
             "",
-            "#include <optional>",
-            "#include <cstdlib>",
             "#include <algorithm>",
             "",
 
