@@ -716,7 +716,7 @@ class CodeGenerator:
             if i > 0:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
-            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) - 1 else "FAIL"
+            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
             code += self.gen_ParsingExpression(parsing_expression, next)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
