@@ -1,5 +1,6 @@
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from io import TextIOWrapper
 import argparse
 import typing
 import enum
@@ -481,18 +482,226 @@ class Parser:
         sys.exit(1)
 
 
+def write_lines(file: TextIOWrapper, *lines: str):
+    for line in lines:
+        file.write(line)
+        file.write("\n")
+
+
+class CodeGenerator:
+    cpp_file: TextIOWrapper
+    hpp_file: TextIOWrapper
+
+    def __init__(self, root_node: BlockStatementNode, filename: str):
+        self.root_node = root_node
+        self.parser_name = filename
+        self.header_from_directive = ""
+        self.code_from_directive = ""
+        self.rule_type = "size_t"
+        self.root_rule = ""
+
+        if name_node := self.check_count_and_get_node(NameNode):
+            self.parser_name = name_node.name
+
+        if header_node := self.check_count_and_get_node(HeaderBlockNode):
+            self.header_from_directive = header_node.header
+
+        if code_node := self.check_count_and_get_node(CodeBlockNode):
+            self.code_from_directive = code_node.code
+
+        if rule_type_node := self.check_count_and_get_node(RuleTypeNode):
+            self.rule_type = rule_type_node.type_name
+
+        if root_rule_node := self.check_count_and_get_node(RootRuleNode):
+            self.root_rule = root_rule_node.name
+
+    def check_count_and_get_node(self, node_type: typing.Type[RT]) -> RT | None:
+        node = [node for node in self.root_node.statements if isinstance(node, node_type)]
+        if len(node) > 1:
+            name = ""
+            if node_type == NameNode:
+                name = "name"
+            elif node_type == CodeBlockNode:
+                name = "cpp"
+            elif node_type == RuleTypeNode:
+                name = "type"
+            elif node_type == RootRuleNode:
+                name = "root"
+            print(f"there can be only one %{name} directive", file=sys.stderr)
+            exit(1)
+        if len(node):
+            return node[0]
+        return None
+
+    def start(self):
+        self.cpp_file = open(f"{self.parser_name}.cpp", "w")
+        self.hpp_file = open(f"{self.parser_name}.hpp", "w")
+
+        write_lines(
+            self.cpp_file,
+            f"#include \"{self.parser_name}.hpp\"",
+            "",
+            "#include <optional>",
+            "#include <cstdlib>",
+            "",
+
+        )
+
+        if self.code_from_directive:
+            write_lines(
+                self.cpp_file,
+                "// code from %code",
+                self.code_from_directive,
+                "// end %code",
+                "",
+            )
+
+        write_lines(
+            self.cpp_file,
+            "namespace PParser",
+            "{",
+            "",
+            "    ////////// BEGINNING OF RULES //////////",
+        )
+
+        write_lines(
+            self.hpp_file,
+            "#ifndef PPARSER_HPP_",
+            "#define PPARSER_HPP_",
+            "",
+            "#include <string_view>",
+            "",
+        )
+
+        if self.header_from_directive:
+            write_lines(
+                self.hpp_file,
+                "",
+                "// code from %hpp",
+                self.header_from_directive,
+                "// end %hpp",
+            )
+
+        write_lines(
+            self.hpp_file,
+            "",
+            "namespace PParser",
+            "{",
+            "",
+            f"    using ExprResult = {self.rule_type};",
+            "",
+            "    struct Token",
+            "    {",
+            "        std::string value;",
+            "        size_t firstLine;",
+            "        size_t firstColumn;",
+            "        size_t lastLine;",
+            "        size_t lastColumn;",
+            "    };",
+            "",
+            "    class Parser",
+            "    {",
+            "    private:",
+            "        const std::string_view src;",
+            "        size_t position = 0;",
+            "",
+            "        ////////// BEGINNING OF RULES //////////"
+        )
+
+        for statement in self.root_node.statements:
+            self.generate(statement)
+
+        write_lines(
+            self.cpp_file,
+            "",
+            "    ////////// END OF RULES //////////",
+            "",
+            "    Token Parser::newToken(std::string_view value)",
+            "    {",
+            "        Token token;",
+            "        token.value = std::move(value);",
+            "        token.firstLine = calcLine(position);",
+            "        token.firstColumn = calcColumn(position, token.firstLine);",
+            "        size_t endPosition = position + value.size();",
+            "        token.lastLine = calcLine(endPosition);",
+            "        token.lastColumn = calcColumn(endPosition, token.lastLine);",
+            "        return token;",
+            "    }",
+            "",
+            "    Token Parser::newToken(size_t startOfToken)",
+            "    {",
+            "        return newToken(src.substr(startOfToken, position));",
+            "    }",
+            "",
+            "    size_t Parser::calcLine(size_t position)",
+            "    {",
+            "        return std::count(src.begin(), src.begin() + position, '\\n') + 1;",
+            "    }",
+            "",
+            "    size_t Parser::calcColumn(size_t position, size_t line)",
+            "    {",
+            "        if (line == 1)",
+            "        {",
+            "            return position + 1;",
+            "        }",
+            "       auto it = std::find(src.rbegin() + (src.size() - position), src.rend(), '\\n');",
+            "       size_t startLinePosition = std::distance(it, src.rend()) - 1;",
+            "",
+            "        return position - startLinePosition + 1;",
+            "    }",
+            "",
+            "    ExprResult Parser::parse()",
+            "    {",
+            "        this->position = 0;",
+            "    }",
+            "",
+            "    Parser::Parser(std::string_view src) : src(src) {}",
+            "",
+            "}"
+        )
+
+        write_lines(
+            self.hpp_file,
+            "",
+            "        ////////// END OF RULES //////////",
+            "",
+            "        Token newToken(std::string_view value);",
+            "        Token newToken(size_t startOfToken);",
+            "        size_t calcLine(size_t position);",
+            "        size_t calcColumn(size_t position, size_t line);",
+            "",
+            "    public:",
+            "        explicit Parser(std::string_view src);",
+            "",
+            "        ExprResult parse();",
+            "    };",
+            "}",
+            "",
+            "#endif // PPARSER_HPP_"
+        )
+
+    def generate(self, node):
+        match node:
+            case NameNode() | HeaderBlockNode() | CodeBlockNode() | RuleTypeNode() | RootRuleNode():
+                pass
+            case _:
+                self.gen_type_error(node)
+
+    def gen_type_error(self, node: Node):
+        print(f"generator for node with type <{type(node).__name__}> not implemented", file=sys.stderr)
+        exit(1)
+
+
 def generate_parser(file):
-    # parser_name = os.path.basename(file.name)[0]
+    filename = os.path.basename(file.name)[0]
     tokenizer = Tokenizer(file)
-    for token in tokenizer.tokenize():
-        print(token)
-    print("="*20)
     parser = Parser(tokenizer)
-    for node in parser.parse().statements:
-        print(node)
+    root_node = parser.parse()
+    code_gen = CodeGenerator(root_node, filename)
+    code_gen.start()
 
 
-argument_parser = argparse.ArgumentParser(description="Peg parser generator`")
+argument_parser = argparse.ArgumentParser(description="Peg parser generator")
 argument_parser.add_argument('--version', action='version', version=f"%(prog)s {VERSION}")
 argument_parser.add_argument("path", type=argparse.FileType(encoding="utf-8"))
 arguments = argument_parser.parse_args()
