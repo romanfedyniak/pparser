@@ -736,13 +736,14 @@ class CodeGenerator:
             match i:
                 case ParsingExpressionRuleNameNode():
                     code += add_indent(self.gen_ParsingExpressionRuleName(i, next), 4)
-                    code += "\n"
                 case ParsingExpressionStringNode():
                     code += add_indent(self.gen_ParsingExpressionStringNode(i, next), 4)
-                    code += "\n"
+                case ParsingExpressionCharacterClassNode():
+                    code += add_indent(self.gen_ParsingExpressionCharacterClassNode(i, next), 4)
                 case _:
                     print(node)
                     self.gen_type_error(node)
+            code += "\n"
         code += "    goto SUCCESS;\n"
         code += "}\n"
         return code
@@ -799,7 +800,7 @@ class CodeGenerator:
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
                 code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
-                code += "\nif (!(true\n"
+                code += "if (!(true\n"
                 code += str_condition
                 code += f")) goto {next};\n"
             else:
@@ -822,8 +823,8 @@ class CodeGenerator:
                 code += "    size_t i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += f"        if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
-            code += "\n        if (!(true\n"
+            code += f"        if (this->position + {str_len - 1} > this->src.size()) break;\n"
+            code += "        if (!(true\n"
             code += add_indent(str_condition, 8)
             code += "        )) break;\n"
             code += f"        this->position += {str_len};\n"
@@ -839,6 +840,61 @@ class CodeGenerator:
             code += str_condition
             code += f")) goto {next};\n"
             code += f"this->position += {str_len};\n"
+        return code
+
+    def gen_ParsingExpressionCharacterClassNode(self, node: ParsingExpressionCharacterClassNode, next: str):
+        # TODO: implement storage of the result in a variable(node.ctx.name)
+        assert node.ctx.name is None, "Not implemented yet"
+
+        code = ""
+        condition = ""
+        for ch in node.characters:
+            condition += f"    || this->src[this->position] == '{ch}'\n"
+
+        if node.ctx.lookahead:
+            if node.ctx.lookahead_positive:
+                code += f"if (this->position > this->size()) goto {next};\n"
+                code += "if (!(false\n"
+                code += condition
+                code += f")) goto {next};\n"
+            else:
+                code += "if (this->position < this->src.size())\n"
+                code += "{\n"
+                code += "    if(!(false\n"
+                code += add_indent(condition, 4)
+                code += f"    )) goto {next};\n"
+                code += "}\n"
+                code += f"else goto {next};\n"
+        elif node.ctx.optional:
+            code += "if (this->position < this->src.size())\n"
+            code += "{\n"
+            code += "    if ((false\n"
+            code += add_indent(condition, 4)
+            code += "    )) this->position++;\n"
+            code += "}\n"
+        elif node.ctx.loop:
+            code += "{\n"
+            if node.ctx.loop_nonempty:
+                code += "    size_t i = 0;"
+            code += "    for(;;)\n"
+            code += "    {\n"
+            code += "        if (this->position > this->src.size()) break;\n"
+            code += "        if (!(false\n"
+            code += add_indent(condition, 8)
+            code += "        )) break;\n"
+            code += "        this->position++;"
+            if node.ctx.loop_nonempty:
+                code += "        i++;\n"
+            code += "    }\n"
+            if node.ctx.loop_nonempty:
+                code += f"\nif (!i) goto {next};\n"
+            code += "}\n"
+        else:
+            code += f"if (this->position > this->src.size()) goto {next};\n"
+            code += "if (!(false\n"
+            code += condition
+            code += f")) goto {next};\n"
+            code += "this->position++;\n"
         return code
 
 
