@@ -28,7 +28,7 @@ class TokenType(enum.Enum):
     RCBRACKET = re.compile(r"}")
     PERCENT = re.compile(r"%")
     COLON = re.compile(r":")
-    STRING = re.compile(r"(?<!\\)\".*?(?<!\\)\"")
+    STRING = re.compile(r"(?<!\\)\".+?(?<!\\)\"")
     CHARACTER_CLASS = re.compile(r"(?<!\\)\[.*?(?<!\\)\]")
     # special tokens
     CODE_SECTION = enum.auto()
@@ -488,6 +488,16 @@ def write_lines(file: TextIOWrapper, *lines: str):
         file.write("\n")
 
 
+def add_indent(string: str, indent: int) -> str:
+    lines = string.split("\n")
+    new_lines = []
+
+    for line in lines:
+        new_lines.append((' ' * indent + line) if line.strip() else '')
+
+    return '\n'.join(new_lines)
+
+
 class CodeGenerator:
     cpp_file: TextIOWrapper
     hpp_file: TextIOWrapper
@@ -534,8 +544,8 @@ class CodeGenerator:
         return None
 
     def start(self):
-        self.cpp_file = open(f"{self.parser_name}.cpp", "w")
-        self.hpp_file = open(f"{self.parser_name}.hpp", "w")
+        self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
+        self.hpp_file = open(f"{self.parser_name}.hpp", "w", encoding="utf-8")
 
         write_lines(
             self.cpp_file,
@@ -543,6 +553,7 @@ class CodeGenerator:
             "",
             "#include <optional>",
             "#include <cstdlib>",
+            "#include <algorithm>",
             "",
 
         )
@@ -562,6 +573,7 @@ class CodeGenerator:
             "{",
             "",
             "    ////////// BEGINNING OF RULES //////////",
+            "",
         )
 
         write_lines(
@@ -605,7 +617,7 @@ class CodeGenerator:
             "        const std::string_view src;",
             "        size_t position = 0;",
             "",
-            "        ////////// BEGINNING OF RULES //////////"
+            "        ////////// BEGINNING OF RULES //////////",
         )
 
         for statement in self.root_node.statements:
@@ -613,7 +625,6 @@ class CodeGenerator:
 
         write_lines(
             self.cpp_file,
-            "",
             "    ////////// END OF RULES //////////",
             "",
             "    Token Parser::newToken(std::string_view value)",
@@ -653,16 +664,16 @@ class CodeGenerator:
             "    ExprResult Parser::parse()",
             "    {",
             "        this->position = 0;",
+            f"        return {self.root_rule}();",
             "    }",
             "",
             "    Parser::Parser(std::string_view src) : src(src) {}",
             "",
-            "}"
+            "}",
         )
 
         write_lines(
             self.hpp_file,
-            "",
             "        ////////// END OF RULES //////////",
             "",
             "        Token newToken(std::string_view value);",
@@ -677,19 +688,153 @@ class CodeGenerator:
             "    };",
             "}",
             "",
-            "#endif // PPARSER_HPP_"
+            "#endif // PPARSER_HPP_",
         )
 
     def generate(self, node):
         match node:
             case NameNode() | HeaderBlockNode() | CodeBlockNode() | RuleTypeNode() | RootRuleNode():
                 pass
+            case RuleNode():
+                if not self.root_rule:
+                    self.root_rule = node.name
+                self.gen_Rule(node)
             case _:
                 self.gen_type_error(node)
 
     def gen_type_error(self, node: Node):
         print(f"generator for node with type <{type(node).__name__}> not implemented", file=sys.stderr)
         exit(1)
+
+    def gen_Rule(self, node: RuleNode):
+        write_lines(self.hpp_file, f"        bool {node.name}();")
+        write_lines(
+            self.cpp_file,
+            f"    bool Parser::{node.name}()",
+            "    {",
+        )
+        code = "auto __mark = this->position;\n"
+        for i, parsing_expression in enumerate(node.parsing_expression):
+            if i > 0:
+                code += f"NEXT_{i}:\n"
+                code += "this->position = __mark;\n"
+            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) - 1 else "FAIL"
+            code += self.gen_ParsingExpression(parsing_expression, next)
+            code += "\n"
+        self.cpp_file.write(add_indent(code, 8))
+        write_lines(
+            self.cpp_file,
+            "    FAIL:",
+            "        this->position = __mark;",
+            "        return false;",
+            "    SUCCESS:",
+            "        return true;",
+        )
+        write_lines(self.cpp_file, "    }", "")
+
+    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next):
+        code = "{\n"
+        for i in node.items:
+            match i:
+                case ParsingExpressionRuleNameNode():
+                    code += add_indent(self.gen_ParsingExpressionRuleName(i, next), 4)
+                    code += "\n"
+                case ParsingExpressionStringNode():
+                    code += add_indent(self.gen_ParsingExpressionStringNode(i, next), 4)
+                    code += "\n"
+                case _:
+                    print(node)
+                    self.gen_type_error(node)
+        code += "    goto SUCCESS;\n"
+        code += "}\n"
+        return code
+
+    def gen_ParsingExpressionRuleName(self, node: ParsingExpressionRuleNameNode, next: str):
+        code = ""
+
+        if node.ctx.lookahead:
+            code += "{\n"
+            code += "   size_t tempMark = position;\n"
+            code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
+            if node.ctx.name:
+                code += f"auto {node.ctx.name} = "
+            code += f"{node.name}())) goto {next};\n"
+            code += "   position = tempMark;\n"
+            code += "}\n"
+        elif node.ctx.optional:
+            if node.ctx.name:
+                code += f"auto {node.ctx.name} = "
+            code += f"({node.name}());\n"
+        elif node.ctx.loop:
+            # TODO: implement storage of the result in a variable(node.ctx.name)
+            assert node.ctx.name is None, "Not implemented yet"
+
+            code += "{\n"
+            if node.ctx.loop_nonempty:
+                code += "    size_t i = 0;\n"
+            code += "    for (;;)\n"
+            code += "    {\n"
+            code += f"        if (!({node.name}())) break;\n"
+            if node.ctx.loop_nonempty:
+                code += "        i++;\n"
+            code += "    }\n"
+            if node.ctx.loop_nonempty:
+                code += f"\n    if (!i) goto {next};\n"
+            code += "}\n"
+        else:
+            code += "if (!("
+            if node.ctx.name:
+                code += f"auto {node.ctx.name} = "
+            code += f"{node.name}())) goto {next};\n"
+        return code
+
+    def gen_ParsingExpressionStringNode(self, node: ParsingExpressionStringNode, next: str):
+        # TODO: implement storage of the result in a variable(node.ctx.name)
+        assert node.ctx.name is None, "Not implemented yet"
+
+        code = ""
+        str_len = len(node.value)
+        str_condition = ""
+        for i, ch in enumerate(node.value):
+            str_condition += f"   && this->src[this->position + {i}] == '{ch}'\n"
+
+        if node.ctx.lookahead:
+            code += f"if ({'' if node.ctx.lookahead_positive else '!'}"
+            code += f"(this->position + {str_len - 1} > this->src.size())) goto {next};\n"
+            code += f"\nif ({'!' if node.ctx.lookahead_positive else ''}(true"
+            code += str_condition
+            code += f")) goto {next};\n"
+        elif node.ctx.optional:
+            code += f"if (this->position + {str_len - 1} <= this->src.size())\n"
+            code += "{\n"
+            code += "    if ((true\n"
+            code += add_indent(str_condition, 4)
+            code += f"    )) this->position += {str_len};\n"
+            code += "}\n"
+        elif node.ctx.loop:
+            code += "{\n"
+            if node.ctx.loop_nonempty:
+                code += "    size_t i = 0;\n"
+            code += "    for (;;)\n"
+            code += "    {\n"
+            code += f"        if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
+            code += "\n        if (!(true\n"
+            code += add_indent(str_condition, 8)
+            code += "        )) break;\n"
+            code += f"        this->position += {str_len};\n"
+            if node.ctx.loop_nonempty:
+                code += "        i++;\n"
+            code += "    }\n"
+            if node.ctx.loop_nonempty:
+                code += f"\n    if (!i) goto {next};\n"
+            code += "}\n"
+        else:
+            code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
+            code += "if (!(true\n"
+            code += str_condition
+            code += f")) goto {next};\n"
+            code += f"this->position += {str_len};\n"
+        return code
 
 
 def generate_parser(file):
