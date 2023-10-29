@@ -799,11 +799,18 @@ class CodeGenerator:
             str_condition += f"   && this->src[this->position + {i}] == '{ch}'\n"
 
         if node.ctx.lookahead:
-            code += f"if ({'' if node.ctx.lookahead_positive else '!'}"
-            code += f"(this->position + {str_len - 1} > this->src.size())) goto {next};\n"
-            code += f"\nif ({'!' if node.ctx.lookahead_positive else ''}(true"
-            code += str_condition
-            code += f")) goto {next};\n"
+            if node.ctx.lookahead_positive:
+                code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
+                code += "\nif (!(true\n"
+                code += str_condition
+                code += f")) goto {next};\n"
+            else:
+                code += f"if (this->position + {str_len - 1} < this->src.size())\n"
+                code += "{\n"
+                code += "    if(true\n"
+                code += add_indent(str_condition, 4)
+                code += f"    ) goto {next};\n"
+                code += "}\n"
         elif node.ctx.optional:
             code += f"if (this->position + {str_len - 1} <= this->src.size())\n"
             code += "{\n"
