@@ -228,7 +228,7 @@ class ParsingExpressionStringNode(ParsingExpressionNode):
 
 @dataclass
 class ParsingExpressionGroupNode(ParsingExpressionNode):
-    parsing_expression: list[list[ParsingExpressionNode]]
+    parsing_expression: list["ParsingExpressionsNode"]
 
 
 @dataclass
@@ -350,7 +350,7 @@ class Parser:
         with self.manager:
             self.match(TokenType.LPAR)
             parsing_expressions = self.loop(True, self.parsing_expression_)
-            group = ParsingExpressionGroupNode(parsing_expressions)
+            group = ParsingExpressionGroupNode([ParsingExpressionsNode(i, None) for i in parsing_expressions])
             self.match(TokenType.RPAR)
             return group
         with self.manager:
@@ -509,6 +509,7 @@ class CodeGenerator:
         self.code_from_directive = ""
         self.rule_type = "size_t"
         self.root_rule = ""
+        self.group_functions = []
 
         if name_node := self.check_count_and_get_node(NameNode):
             self.parser_name = name_node.name
@@ -621,6 +622,8 @@ class CodeGenerator:
         for statement in self.root_node.statements:
             self.generate(statement)
 
+        write_lines(self.cpp_file, *self.group_functions)
+
         write_lines(
             self.cpp_file,
             "    ////////// END OF RULES //////////",
@@ -717,7 +720,7 @@ class CodeGenerator:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
             next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
-            code += self.gen_ParsingExpression(parsing_expression, next)
+            code += self.gen_ParsingExpression(parsing_expression, next, node.name, i + 1)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
         write_lines(
@@ -730,7 +733,8 @@ class CodeGenerator:
         )
         write_lines(self.cpp_file, "    }", "")
 
-    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next):
+    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next: str, rule_name: str, expr_index: int):
+        group_index = 1
         code = "{\n"
         for i in node.items:
             match i:
@@ -740,6 +744,10 @@ class CodeGenerator:
                     code += add_indent(self.gen_ParsingExpressionStringNode(i, next), 4)
                 case ParsingExpressionCharacterClassNode():
                     code += add_indent(self.gen_ParsingExpressionCharacterClassNode(i, next), 4)
+                case ParsingExpressionGroupNode():
+                    group_code = self.gen_ParsingExpressionGroupNode(i, next, rule_name, f"{expr_index}_{group_index}")
+                    code += add_indent(group_code, 4)
+                    group_index += 1
                 case _:
                     print(node)
                     self.gen_type_error(node)
@@ -882,7 +890,7 @@ class CodeGenerator:
             code += "        if (!(false\n"
             code += add_indent(condition, 8)
             code += "        )) break;\n"
-            code += "        this->position++;"
+            code += "        this->position++;\n"
             if node.ctx.loop_nonempty:
                 code += "        i++;\n"
             code += "    }\n"
@@ -895,6 +903,63 @@ class CodeGenerator:
             code += condition
             code += f")) goto {next};\n"
             code += "this->position++;\n"
+        return code
+
+    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, rule_name: str, index: str):
+        # TODO: implement storage of the result in a variable(node.ctx.name)
+        assert node.ctx.name is None, "Not implemented yet"
+
+        code = ""
+        fn_code = ""
+        function_name = f"{rule_name}_group_{index}"
+
+        fn_code += f"    bool Parser::{function_name}()\n"
+        fn_code += "    {\n"
+
+        fn_code += "        auto __mark = this->position;\n"
+        for i, parsing_expression in enumerate(node.parsing_expression):
+            if i > 0:
+                fn_code += f"        NEXT_{i}:\n"
+                fn_code += "        this->position = __mark;\n"
+            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
+            fn_code += add_indent(self.gen_ParsingExpression(parsing_expression, next, function_name, i + 1), 8)
+            fn_code += "\n"
+
+        fn_code += "    FAIL:\n"
+        fn_code += "        this->position = __mark;\n"
+        fn_code += "        return false;\n"
+        fn_code += "    SUCCESS:\n"
+        fn_code += "        return true;\n"
+        fn_code += "    }\n\n"
+
+        self.hpp_file.write(f"        bool {function_name}();\n")
+        self.group_functions.append(fn_code)
+
+        if node.ctx.lookahead:
+            code += "{\n"
+            code += "   size_t tempMark = position;\n"
+            code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
+            code += f"{function_name}())) goto {next};\n"
+            code += "   position = tempMark;\n"
+            code += "}\n"
+        elif node.ctx.optional:
+            code += f"({function_name}());\n"
+        elif node.ctx.loop:
+            code += "{\n"
+            if node.ctx.loop_nonempty:
+                code += "    size_t i = 0;\n"
+            code += "    for (;;)\n"
+            code += "    {\n"
+            code += f"        if (!({function_name}())) break;\n"
+            if node.ctx.loop_nonempty:
+                code += "        i++;\n"
+            code += "    }\n"
+            if node.ctx.loop_nonempty:
+                code += f"\n    if (!i) goto {next};\n"
+            code += "}\n"
+        else:
+            code += f"if (!({function_name}())) goto {next};\n"
+
         return code
 
 
