@@ -764,12 +764,12 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             code += "{\n"
-            code += "   size_t tempMark = position;\n"
+            code += "   size_t __tempMark = position;\n"
             code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
             if node.ctx.name:
                 code += f"auto {node.ctx.name} = "
             code += f"{node.name}())) goto {next};\n"
-            code += "   position = tempMark;\n"
+            code += "   position = __tempMark;\n"
             code += "}\n"
         elif node.ctx.optional:
             if node.ctx.name:
@@ -781,15 +781,15 @@ class CodeGenerator:
 
             code += "{\n"
             if node.ctx.loop_nonempty:
-                code += "    size_t i = 0;\n"
+                code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
             code += f"        if (!({node.name}())) break;\n"
             if node.ctx.loop_nonempty:
-                code += "        i++;\n"
+                code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\n    if (!i) goto {next};\n"
+                code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
             code += "if (!("
@@ -831,7 +831,7 @@ class CodeGenerator:
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
-                code += "    size_t i = 0;\n"
+                code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
             code += f"        if (this->position + {str_len - 1} > this->src.size()) break;\n"
@@ -840,10 +840,10 @@ class CodeGenerator:
             code += "        )) break;\n"
             code += f"        this->position += {str_len};\n"
             if node.ctx.loop_nonempty:
-                code += "        i++;\n"
+                code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\n    if (!i) goto {next};\n"
+                code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
             code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
@@ -886,7 +886,7 @@ class CodeGenerator:
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
-                code += "    size_t i = 0;"
+                code += "    size_t __i = 0;"
             code += "    for(;;)\n"
             code += "    {\n"
             code += "        if (this->position > this->src.size()) break;\n"
@@ -895,10 +895,10 @@ class CodeGenerator:
             code += "        )) break;\n"
             code += "        this->position++;\n"
             if node.ctx.loop_nonempty:
-                code += "        i++;\n"
+                code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\nif (!i) goto {next};\n"
+                code += f"\nif (!__i) goto {next};\n"
             code += "}\n"
         else:
             code += f"if (this->position > this->src.size()) goto {next};\n"
@@ -940,25 +940,25 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             code += "{\n"
-            code += "   size_t tempMark = position;\n"
+            code += "   size_t __tempMark = position;\n"
             code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
             code += f"{function_name}())) goto {next};\n"
-            code += "   position = tempMark;\n"
+            code += "   position = __tempMark;\n"
             code += "}\n"
         elif node.ctx.optional:
             code += f"({function_name}());\n"
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
-                code += "    size_t i = 0;\n"
+                code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
             code += f"        if (!({function_name}())) break;\n"
             if node.ctx.loop_nonempty:
-                code += "        i++;\n"
+                code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\n    if (!i) goto {next};\n"
+                code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
             code += f"if (!({function_name}())) goto {next};\n"
