@@ -28,7 +28,7 @@ class TokenType(enum.Enum):
     RCBRACKET = re.compile(r"}")
     PERCENT = re.compile(r"%")
     COLON = re.compile(r":")
-    STRING = re.compile(r"(?<!\\)\".+?(?<!\\)\"")
+    STRING = re.compile(r"\".+?(?<!\\)\"")
     CHARACTER_CLASS = re.compile(r"(?<!\\)\[.*?(?<!\\)\]")
     # special tokens
     CODE_SECTION = enum.auto()
@@ -248,6 +248,37 @@ class RuleNode(Node):
     parsing_expression: list[ParsingExpressionsNode]
 
 
+def escape_string(string: str) -> str:
+    new_string = ""
+    table = {
+        "\\": "\\",
+        "a": "\a",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "v": "\v",
+    }
+
+    i = 0
+    while i < len(string) - 1:
+        ch = string[i]
+        next_ch = string[i + 1]
+        if ch == "\\" and next_ch in table:
+            new_string += table[next_ch]
+            i += 2
+            if i > len(string):
+                new_string += string[-1:]
+        else:
+            new_string += ch
+            i += 1
+    if i < len(string):
+        new_string += string[-1:]
+
+    return new_string
+
+
 class ParsingFail(Exception):
     pass
 
@@ -346,7 +377,8 @@ class Parser:
             self.lookahead(False, TokenType.EQUAL)
             return ParsingExpressionRuleNameNode(id)
         with self.manager:
-            return ParsingExpressionStringNode(self.match(TokenType.STRING)[1:-1])
+            string = escape_string(self.match(TokenType.STRING)[1:-1])
+            return ParsingExpressionStringNode(string)
         with self.manager:
             self.match(TokenType.LPAR)
             parsing_expressions = self.loop(True, self.parsing_expression_)
@@ -354,7 +386,8 @@ class Parser:
             self.match(TokenType.RPAR)
             return group
         with self.manager:
-            return ParsingExpressionCharacterClassNode(self.match(TokenType.CHARACTER_CLASS)[1:-1])
+            string = escape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1])
+            return ParsingExpressionCharacterClassNode(string)
         raise ParsingFail
 
     def parsing_expression_item(self):
@@ -806,7 +839,8 @@ class CodeGenerator:
         str_len = len(node.value)
         str_condition = ""
         for i, ch in enumerate(node.value):
-            str_condition += f"   && this->src[this->position + {i}] == '{ch}'\n"
+            assert not (ord(ch) > 256)
+            str_condition += f"   && this->src[this->position + {i}] == {ord(ch)}\n"
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
@@ -860,7 +894,8 @@ class CodeGenerator:
         code = ""
         condition = ""
         for ch in node.characters:
-            condition += f"    || this->src[this->position] == '{ch}'\n"
+            assert not (ord(ch) > 256)
+            condition += f"    || this->src[this->position] == {ord(ch)}\n"
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
