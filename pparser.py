@@ -692,6 +692,9 @@ class CodeGenerator:
             "#endif // PPARSER_HPP_",
         )
 
+        self.cpp_file.close()
+        self.hpp_file.close()
+
     def generate(self, node):
         match node:
             case NameNode() | HeaderBlockNode() | CodeBlockNode() | RuleTypeNode() | RootRuleNode():
