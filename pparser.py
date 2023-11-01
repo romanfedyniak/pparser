@@ -847,7 +847,7 @@ class CodeGenerator:
         str_condition = ""
         for i, ch in enumerate(node.value):
             assert not (ord(ch) > 256), "Unicode not supported in strings"
-            str_condition += f"   && this->src[this->position + {i}] == {ord(ch)}\n"
+            str_condition += f"   && this->src[this->position + {i}] == {ord(ch)} // {repr(ch)}\n"
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
@@ -909,10 +909,10 @@ class CodeGenerator:
                                                           f" inside character class: [{characters}],"
                                                           f" '{ch}-{characters[i + 2]}'")
                 condition += f"    || this->src[this->position] >= {ord(ch)}"
-                condition += f" && this->src[this->position] <= {ord(characters[i + 2])} // {ch}, {characters[i + 2]}\n"
+                condition += f" && this->src[this->position] <= {ord(characters[i + 2])} // {repr(ch)}, {repr(characters[i + 2])}\n"
                 i += 2
             else:
-                condition += f"    || this->src[this->position] == {ord(ch)} // '{ch}'\n"
+                condition += f"    || this->src[this->position] == {ord(ch)} // {repr(ch)}\n"
             i += 1
         return condition
 
