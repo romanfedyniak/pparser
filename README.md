@@ -116,9 +116,10 @@ Consists of the following element:
 Rule = "string"
 ```
 
-- Character class - this is a set of characters. It is enclosed within square brackets, matches only one character from the sequence, and cannot be empty.
+- Character class - this is a set of characters. It is enclosed within square brackets, matches only one character from the sequence, and cannot be empty. You can use a hyphen inside a character class to specify a range of characters. [0-9] matches a single digit between 0 and 9.
 ```
 Rule = [abcd]
+Hexadecimal = [0-9a-fA-F] # matches a single hexadecimal digit
 ```
 
 - Another rule - invokes another rule.

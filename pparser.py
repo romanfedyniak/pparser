@@ -29,7 +29,7 @@ class TokenType(enum.Enum):
     PERCENT = re.compile(r"%")
     COLON = re.compile(r":")
     STRING = re.compile(r"\".+?(?<!\\)\"")
-    CHARACTER_CLASS = re.compile(r"(?<!\\)\[.*?(?<!\\)\]")
+    CHARACTER_CLASS = re.compile(r"\[.+?(?<!\\)\]")
     # special tokens
     CODE_SECTION = enum.auto()
     ACTION = enum.auto()
@@ -248,19 +248,26 @@ class RuleNode(Node):
     parsing_expression: list[ParsingExpressionsNode]
 
 
-def escape_string(string: str) -> str:
-    new_string = ""
-    table = {
-        "\\": "\\",
-        "a": "\a",
-        "b": "\b",
-        "f": "\f",
-        "n": "\n",
-        "r": "\r",
-        "t": "\t",
-        "v": "\v",
-    }
+STRING_ESCAPE_TABLE = {
+    "\\": "\\",
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
 
+CHARACTER_CLASS_ESCAPE_TABLE = STRING_ESCAPE_TABLE.copy()
+CHARACTER_CLASS_ESCAPE_TABLE.update({
+    "]": "]",
+    "[": "[",
+})
+
+
+def escape_string(string: str, table: dict[str, str]) -> str:
+    new_string = ""
     i = 0
     while i < len(string) - 1:
         ch = string[i]
@@ -377,7 +384,7 @@ class Parser:
             self.lookahead(False, TokenType.EQUAL)
             return ParsingExpressionRuleNameNode(id)
         with self.manager:
-            string = escape_string(self.match(TokenType.STRING)[1:-1])
+            string = escape_string(self.match(TokenType.STRING)[1:-1], STRING_ESCAPE_TABLE)
             return ParsingExpressionStringNode(string)
         with self.manager:
             self.match(TokenType.LPAR)
@@ -386,7 +393,7 @@ class Parser:
             self.match(TokenType.RPAR)
             return group
         with self.manager:
-            string = escape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1])
+            string = escape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1], CHARACTER_CLASS_ESCAPE_TABLE)
             return ParsingExpressionCharacterClassNode(string)
         raise ParsingFail
 
@@ -839,7 +846,7 @@ class CodeGenerator:
         str_len = len(node.value)
         str_condition = ""
         for i, ch in enumerate(node.value):
-            assert not (ord(ch) > 256)
+            assert not (ord(ch) > 256), "Unicode not supported in strings"
             str_condition += f"   && this->src[this->position + {i}] == {ord(ch)}\n"
 
         if node.ctx.lookahead:
@@ -887,15 +894,34 @@ class CodeGenerator:
             code += f"this->position += {str_len};\n"
         return code
 
+    def generate_character_class_condition(self, characters: str) -> str:
+        for ch in characters:
+            assert not (ord(ch) > 256), "Unicode not supported in character classes"
+
+        condition = ""
+        i = 0
+        while i < len(characters):
+            ch = characters[i]
+            if i + 2 < len(characters) and characters[i + 1] == "-":
+                assert ch != characters[i + 2], ("The same characters in a range inside character class:"
+                                                 f" [{characters}], '{ch}-{characters[i + 2]}'")
+                assert ord(ch) < ord(characters[i + 2]), ("The first character is 'greater' than the second in a range"
+                                                          f" inside character class: [{characters}],"
+                                                          f" '{ch}-{characters[i + 2]}'")
+                condition += f"    || this->src[this->position] >= {ord(ch)}"
+                condition += f" && this->src[this->position] <= {ord(characters[i + 2])} // {ch}, {characters[i + 2]}\n"
+                i += 2
+            else:
+                condition += f"    || this->src[this->position] == {ord(ch)} // '{ch}'\n"
+            i += 1
+        return condition
+
     def gen_ParsingExpressionCharacterClassNode(self, node: ParsingExpressionCharacterClassNode, next: str):
         # TODO: implement storage of the result in a variable(node.ctx.name)
         assert node.ctx.name is None, "Not implemented yet"
 
         code = ""
-        condition = ""
-        for ch in node.characters:
-            assert not (ord(ch) > 256)
-            condition += f"    || this->src[this->position] == {ord(ch)}\n"
+        condition = self.generate_character_class_condition(node.characters)
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
