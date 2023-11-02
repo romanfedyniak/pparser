@@ -550,6 +550,8 @@ class CodeGenerator:
         self.rule_type = "size_t"
         self.root_rule = ""
         self.group_functions = []
+        self.rules_return_type = dict()
+        self.type_analysis()
 
         if name_node := self.check_count_and_get_node(NameNode):
             self.parser_name = name_node.name
@@ -583,6 +585,23 @@ class CodeGenerator:
         if len(node):
             return node[0]
         return None
+
+    def type_analysis(self):
+        for node in self.root_node.statements:
+            if not isinstance(node, RuleNode):
+                continue
+            assert not (node.name in self.rules_return_type), f"Rule '{node.name}' has more than one definition"
+            type_ = self.get_return_type_parsing_expression(node.parsing_expression[0])
+            for parsing_expression in node.parsing_expression[1:]:
+                assert type_ == self.get_return_type_parsing_expression(parsing_expression), \
+                       f"In rule '{node.name}', options return different types"
+            self.rules_return_type[node.name] = type_
+
+    def get_return_type_parsing_expression(self, parsing_expression: ParsingExpressionsNode) -> str:
+        if parsing_expression.action is None or "$$" not in parsing_expression.action:
+            return "bool"
+        else:
+            return self.rule_type
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
