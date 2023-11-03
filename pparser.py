@@ -674,9 +674,7 @@ class CodeGenerator:
             f"#include \"{self.parser_name}.hpp\"",
             "",
             "#include <algorithm>",
-            "#include <optional>",
             "",
-
         )
 
         if self.code_from_directive:
@@ -704,6 +702,7 @@ class CodeGenerator:
             "#define PPARSER_HPP_",
             "",
             "#include <string_view>",
+            "#include <optional>",
             "",
         )
 
@@ -834,10 +833,11 @@ class CodeGenerator:
         exit(1)
 
     def gen_Rule(self, node: RuleNode):
-        write_lines(self.hpp_file, f"        bool {node.name}();")
+        return_type = self.rules_return_type[node.name]
+        write_lines(self.hpp_file, f"        {return_type} {node.name}();")
         write_lines(
             self.cpp_file,
-            f"    bool Parser::{node.name}()",
+            f"    {return_type} Parser::{node.name}()",
             "    {",
         )
         code = "auto __mark = this->position;\n"
@@ -846,20 +846,24 @@ class CodeGenerator:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
             next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
-            code += self.gen_ParsingExpression(parsing_expression, next, node.name, i + 1)
+            code += self.gen_ParsingExpression(parsing_expression, next, return_type, node.name, i + 1)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
         write_lines(
             self.cpp_file,
             "    FAIL:",
             "        this->position = __mark;",
-            "        return false;",
-            "    SUCCESS:",
-            "        return true;",
+            f"        return {'std::nullopt' if return_type.is_optional else 'false'};",
         )
+        if not return_type.is_optional:
+            write_lines(
+                self.cpp_file,
+                "    SUCCESS:",
+                "        return true;",
+            )
         write_lines(self.cpp_file, "    }", "")
 
-    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next: str, rule_name: str, expr_index: int):
+    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next: str, return_type: CppType, rule_name: str, expr_index: int):
         group_index = 1
         generated_exprs: list[GeneratedExpression] = []
         for i in node.items:
@@ -896,11 +900,18 @@ class CodeGenerator:
         if node.action:
             code += "    // action\n"
             code += "    {\n"
-            code += set_ident(node.action, 8)
-            code += "\n"
+            if "$$" in node.action:
+                code += f"        {return_type.type_} __rule_result;\n"
+                code += set_indent(node.action.replace("$$", "__rule_result"), 8)
+                code += "\n"
+                code += "        return __rule_result;\n"
+            else:
+                code += set_indent(node.action, 8)
+                code += "\n"
             code += "    }\n"
             code += "    // end of action\n"
-        code += "    goto SUCCESS;\n"
+        if node.action is None or "$$" not in node.action:
+            code += "    goto SUCCESS;\n"
         code += "}\n"
         return code
 
@@ -1133,7 +1144,7 @@ class CodeGenerator:
                 fn_code += f"        NEXT_{i}:\n"
                 fn_code += "        this->position = __mark;\n"
             next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
-            fn_code += add_indent(self.gen_ParsingExpression(parsing_expression, next, function_name, i + 1), 8)
+            fn_code += add_indent(self.gen_ParsingExpression(parsing_expression, next, CppType("bool"), function_name, i + 1), 8)
             fn_code += "\n"
 
         fn_code += "    FAIL:\n"
