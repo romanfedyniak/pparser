@@ -538,6 +538,33 @@ def add_indent(string: str, indent: int) -> str:
     return '\n'.join(new_lines)
 
 
+def set_ident(string: str, indent: int) -> str:
+    lines = string.split("\n")
+    new_lines = []
+
+    for line in lines:
+        new_lines.append(' ' * indent + line.strip() if line.strip() else '')
+
+    return '\n'.join(new_lines)
+
+
+@dataclass
+class GeneratedExpression:
+    code: str
+    user_defined_var: str | None = None
+
+
+@dataclass
+class CppType:
+    type_: str
+    is_optional: bool = False
+
+    def __str__(self) -> str:
+        if self.is_optional:
+            return f"std::optional<{self.type_}>"
+        return self.type_
+
+
 class CodeGenerator:
     cpp_file: TextIOWrapper
     hpp_file: TextIOWrapper
@@ -550,7 +577,7 @@ class CodeGenerator:
         self.rule_type = "size_t"
         self.root_rule = ""
         self.group_functions = []
-        self.rules_return_type = dict()
+        self.rules_return_type: dict[str, CppType] = dict()
         self.type_analysis()
 
         if name_node := self.check_count_and_get_node(NameNode):
@@ -597,11 +624,11 @@ class CodeGenerator:
                        f"In rule '{node.name}', options return different types"
             self.rules_return_type[node.name] = type_
 
-    def get_return_type_parsing_expression(self, parsing_expression: ParsingExpressionsNode) -> str:
+    def get_return_type_parsing_expression(self, parsing_expression: ParsingExpressionsNode) -> CppType:
         if parsing_expression.action is None or "$$" not in parsing_expression.action:
-            return "bool"
+            return CppType("bool")
         else:
-            return self.rule_type
+            return CppType(self.rule_type, is_optional=True)
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
@@ -615,6 +642,7 @@ class CodeGenerator:
             f"#include \"{self.parser_name}.hpp\"",
             "",
             "#include <algorithm>",
+            "#include <optional>",
             "",
 
         )
@@ -769,7 +797,7 @@ class CodeGenerator:
             case _:
                 self.gen_type_error(node)
 
-    def gen_type_error(self, node: Node):
+    def gen_type_error(self, node: Node) -> typing.NoReturn:
         print(f"generator for node with type <{type(node).__name__}> not implemented", file=sys.stderr)
         exit(1)
 
@@ -801,53 +829,84 @@ class CodeGenerator:
 
     def gen_ParsingExpression(self, node: ParsingExpressionsNode, next: str, rule_name: str, expr_index: int):
         group_index = 1
-        code = "{\n"
+        generated_exprs: list[GeneratedExpression] = []
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
-                    code += add_indent(self.gen_ParsingExpressionRuleName(i, next), 4)
+                    generated_exprs.append(self.gen_ParsingExpressionRuleName(i, next))
                 case ParsingExpressionStringNode():
-                    code += add_indent(self.gen_ParsingExpressionStringNode(i, next), 4)
+                    generated_exprs.append(self.gen_ParsingExpressionStringNode(i, next))
                 case ParsingExpressionCharacterClassNode():
-                    code += add_indent(self.gen_ParsingExpressionCharacterClassNode(i, next), 4)
+                    generated_exprs.append(self.gen_ParsingExpressionCharacterClassNode(i, next))
                 case ParsingExpressionGroupNode():
-                    group_code = self.gen_ParsingExpressionGroupNode(i, next, rule_name, f"{expr_index}_{group_index}")
-                    code += add_indent(group_code, 4)
+                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, rule_name, f"{expr_index}_{group_index}"))
                     group_index += 1
                 case _:
-                    print(node)
                     self.gen_type_error(node)
+
+        vars_declaration = ""
+        for g in generated_exprs:
+            if var := g.user_defined_var:
+                vars_declaration += var
+                vars_declaration += "\n"
+
+        if len(vars_declaration) and node.action is None:
+            assert False, f"Variables are declared, but the expression has no action, rule: '{rule_name}', expression: {expr_index}"
+
+        code = "{\n"
+        if len(vars_declaration):
+            code += "    // User defined variables\n"
+            code += add_indent(vars_declaration, 4)
+            code += "    // end variables\n\n"
+        for g in generated_exprs:
+            code += add_indent(g.code, 4)
             code += "\n"
+        if node.action:
+            code += "    // action\n"
+            code += "    {\n"
+            code += set_ident(node.action, 8)
+            code += "\n"
+            code += "    }\n"
+            code += "    // end of action\n"
         code += "    goto SUCCESS;\n"
         code += "}\n"
         return code
 
-    def gen_ParsingExpressionRuleName(self, node: ParsingExpressionRuleNameNode, next: str):
+    def gen_ParsingExpressionRuleName(self, node: ParsingExpressionRuleNameNode, next: str) -> GeneratedExpression:
         code = ""
+        var = None
+        return_type = self.rules_return_type[node.name]
 
         if node.ctx.lookahead:
             code += "{\n"
             code += "   size_t __tempMark = position;\n"
             code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
             if node.ctx.name:
-                code += f"auto {node.ctx.name} = "
+                code += "auto __result = "
+                var = f"{return_type.type_} {node.ctx.name};"
             code += f"{node.name}())) goto {next};\n"
+            if node.ctx.name:
+                code += f"else {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
             code += "   position = __tempMark;\n"
             code += "}\n"
         elif node.ctx.optional:
             if node.ctx.name:
-                code += f"auto {node.ctx.name} = "
+                var = f"{return_type.type_} {node.ctx.name};"
+                code += "auto __result = "
             code += f"({node.name}());\n"
+            if node.ctx.name:
+                code += f"{node.ctx.name} = __result.value();\n"
         elif node.ctx.loop:
-            # TODO: implement storage of the result in a variable(node.ctx.name)
-            assert node.ctx.name is None, "Not implemented yet"
-
+            if node.ctx.name:
+                var = f"std::vector<{return_type.type_}> {node.ctx.name};"
             code += "{\n"
             if node.ctx.loop_nonempty:
                 code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += f"        if (!({node.name}())) break;\n"
+            code += f"        if (!({'auto __result = ' if node.ctx.name else ''} {node.name}())) break;\n"
+            if node.ctx.name:
+                code += f"        {node.ctx.name}.push_back(__result{'.value()' if return_type.is_optional else ''});\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
@@ -855,16 +914,21 @@ class CodeGenerator:
                 code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += "if (!("
+            code += "{\n"
             if node.ctx.name:
-                code += f"auto {node.ctx.name} = "
+                var = f"{return_type.type_} {node.ctx.name};"
+                code += f"    {return_type} __result;\n"
+            code += "    if (!("
+            if node.ctx.name:
+                code += "__result = "
             code += f"{node.name}())) goto {next};\n"
-        return code
+            if node.ctx.name:
+                code += f"    {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
+            code += "}\n"
+        return GeneratedExpression(code, var)
 
-    def gen_ParsingExpressionStringNode(self, node: ParsingExpressionStringNode, next: str):
-        # TODO: implement storage of the result in a variable(node.ctx.name)
-        assert node.ctx.name is None, "Not implemented yet"
-
+    def gen_ParsingExpressionStringNode(self, node: ParsingExpressionStringNode, next: str) -> GeneratedExpression:
+        var = None
         code = ""
         str_len = len(node.value)
         str_condition = ""
@@ -885,12 +949,21 @@ class CodeGenerator:
                 code += add_indent(str_condition, 4)
                 code += f"    ) goto {next};\n"
                 code += "}\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
         elif node.ctx.optional:
             code += f"if (this->position + {str_len - 1} <= this->src.size())\n"
             code += "{\n"
             code += "    if ((true\n"
             code += add_indent(str_condition, 4)
-            code += f"    )) this->position += {str_len};\n"
+            code += "    ))\n"
+            code += "    {\n"
+            if node.ctx.name:
+                var = f"std::optional<std::string> {node.ctx.name};"
+                code += f"        {node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
+            code += f"        this->position += {str_len};\n"
+            code += "    }\n"
             code += "}\n"
         elif node.ctx.loop:
             code += "{\n"
@@ -902,6 +975,9 @@ class CodeGenerator:
             code += "        if (!(true\n"
             code += add_indent(str_condition, 8)
             code += "        )) break;\n"
+            if node.ctx.name:
+                var = f"std::vector<std::string> {node.ctx.name};"
+                code += f"        {node.ctx.name}.push_back(\"{repr(node.value)[1:-1]}\");\n"
             code += f"        this->position += {str_len};\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
@@ -914,8 +990,11 @@ class CodeGenerator:
             code += "if (!(true\n"
             code += str_condition
             code += f")) goto {next};\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
             code += f"this->position += {str_len};\n"
-        return code
+        return GeneratedExpression(code, var)
 
     def generate_character_class_condition(self, characters: str) -> str:
         for ch in characters:
@@ -939,10 +1018,8 @@ class CodeGenerator:
             i += 1
         return condition
 
-    def gen_ParsingExpressionCharacterClassNode(self, node: ParsingExpressionCharacterClassNode, next: str):
-        # TODO: implement storage of the result in a variable(node.ctx.name)
-        assert node.ctx.name is None, "Not implemented yet"
-
+    def gen_ParsingExpressionCharacterClassNode(self, node: ParsingExpressionCharacterClassNode, next: str) -> GeneratedExpression:
+        var = ""
         code = ""
         condition = self.generate_character_class_condition(node.characters)
 
@@ -960,39 +1037,54 @@ class CodeGenerator:
                 code += f"    )) goto {next};\n"
                 code += "}\n"
                 code += f"else goto {next};\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = this->src[this->position];\n"
         elif node.ctx.optional:
             code += "if (this->position < this->src.size())\n"
             code += "{\n"
             code += "    if ((false\n"
             code += add_indent(condition, 4)
-            code += "    )) this->position++;\n"
+            code += "    ))\n"
+            code += "    {\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"        {node.ctx.name} = this->src[this->position];\n"
+            code += "        this->position++;\n"
+            code += "    }\n"
             code += "}\n"
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
-                code += "    size_t __i = 0;"
+                code += "    size_t __i = 0;\n"
             code += "    for(;;)\n"
             code += "    {\n"
             code += "        if (this->position > this->src.size()) break;\n"
             code += "        if (!(false\n"
             code += add_indent(condition, 8)
             code += "        )) break;\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"        {node.ctx.name} += this->src[this->position];\n"
             code += "        this->position++;\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\nif (!__i) goto {next};\n"
+                code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
             code += f"if (this->position > this->src.size()) goto {next};\n"
             code += "if (!(false\n"
             code += condition
             code += f")) goto {next};\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = this->src[this->position];\n"
             code += "this->position++;\n"
-        return code
+        return GeneratedExpression(code, var)
 
-    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, rule_name: str, index: str):
+    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, rule_name: str, index: str) -> GeneratedExpression:
         # TODO: implement storage of the result in a variable(node.ctx.name)
         assert node.ctx.name is None, "Not implemented yet"
 
@@ -1047,7 +1139,7 @@ class CodeGenerator:
         else:
             code += f"if (!({function_name}())) goto {next};\n"
 
-        return code
+        return GeneratedExpression(code, None)
 
 
 def generate_parser(file):
