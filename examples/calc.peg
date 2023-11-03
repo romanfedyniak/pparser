@@ -1,0 +1,39 @@
+%type "int"
+
+%hpp {
+    #include <iostream>
+}
+
+%cpp {
+    int main(void)
+    {
+        std::string expression;
+        for (;;)
+        {
+            std::cout << "enter expression: ";
+            std::getline(std::cin, expression);
+            PParser::Parser parser(expression);
+            if (std::optional<PParser::ExprResult> result; result = parser.parse())
+                std::cout << "result: " << result.value() << std::endl;
+            else
+                std::cout << "invalid expression" << std::endl;
+        }
+        return 0;
+    }
+}
+
+Expression =
+    | n1:Number _ "+" _ n2:Number { $$ = n1 + n2; }
+    | n1:Number _ "-" _ n2:Number { $$ = n1 - n2; }
+    | n1:Number _ "*" _ n2:Number { $$ = n1 * n2; }
+    | n1:Number _ "/" _ n2:Number{
+        if (n2 == 0)
+        {
+            std::cout << "Сannot divide by zero" << std::endl;
+            return std::nullopt;
+        }
+        $$ = n1 / n2;
+    }
+
+Number = n:[0-9]+ { $$ = std::stoi(n); }
+_ = [ \t]*
