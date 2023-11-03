@@ -560,14 +560,24 @@ def add_indent(string: str, indent: int) -> str:
     return '\n'.join(new_lines)
 
 
-def set_ident(string: str, indent: int) -> str:
+def get_indent(string: str) -> int:
+    return len(string) - len(string.lstrip())
+
+
+def outdent(string: str) -> str:
     lines = string.split("\n")
     new_lines = []
+    indent = min((get_indent(line) for line in lines if line != ''))
 
     for line in lines:
-        new_lines.append(' ' * indent + line.strip() if line.strip() else '')
+        new_indent = get_indent(line) - indent
+        new_lines.append((' ' * new_indent + line.lstrip()) if line.strip() else '')
 
     return '\n'.join(new_lines)
+
+
+def set_indent(string: str, indent: int) -> str:
+    return add_indent(outdent(string), indent)
 
 
 @dataclass
