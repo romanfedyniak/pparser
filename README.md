@@ -18,9 +18,9 @@ calc.peg:
 %type "int"
 %root Sum
 
-Value = a:[0-9]+ { $$ = a }
-Sum = a:Value _ "+" _ b:Value { $$ = a + b }
-_ = [ \t]+
+Value = a:[0-9]+ { $$ = std::stoi(a); }
+Sum = a:Value _ "+" _ b:Value { $$ = a + b; }
+_ = [ \t]*
 ```
 
 generate parser:
@@ -36,7 +36,8 @@ int main() {
     char str[] = "1 + 2";
     PParser::Parser parser(str); // create parser
     auto result = parser.parse(); // use it
-    std::cout << result << std::endl;
+    if (result.has_value())
+        std::cout << result.value() << std::endl;
     return 0;
 }
 ```
