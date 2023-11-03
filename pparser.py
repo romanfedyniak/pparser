@@ -567,7 +567,7 @@ def get_indent(string: str) -> int:
 def remove_indent(string: str) -> str:
     lines = string.split("\n")
     new_lines = []
-    indent = min((get_indent(line) for line in lines if line != ''))
+    indent = min((get_indent(line) for line in lines if line.strip()))
 
     for line in lines:
         new_indent = get_indent(line) - indent
@@ -584,6 +584,12 @@ def set_indent(string: str, indent: int) -> str:
 class GeneratedExpression:
     code: str
     user_defined_var: str | None = None
+
+
+@dataclass
+class GeneratedGroupExpression:
+    code: str
+    user_defined_vars: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -608,7 +614,6 @@ class CodeGenerator:
         self.code_from_directive = ""
         self.rule_type = "size_t"
         self.root_rule = ""
-        self.group_functions = []
         self.rules_return_type: dict[str, CppType] = dict()
 
         if name_node := self.check_count_and_get_node(NameNode):
@@ -703,6 +708,7 @@ class CodeGenerator:
             "#ifndef PPARSER_HPP_",
             "#define PPARSER_HPP_",
             "",
+            "#include <string>",
             "#include <string_view>",
             "#include <optional>",
             "",
@@ -745,8 +751,6 @@ class CodeGenerator:
 
         for statement in self.root_node.statements:
             self.generate(statement)
-
-        write_lines(self.cpp_file, *self.group_functions)
 
         write_lines(
             self.cpp_file,
@@ -809,7 +813,7 @@ class CodeGenerator:
             "    public:",
             "        explicit Parser(std::string_view src);",
             "",
-            "        std::optional<ExprResult> parse();",
+            f"        {self.rules_return_type[self.root_rule]} parse();",
             "    };",
             "}",
             "",
@@ -865,9 +869,10 @@ class CodeGenerator:
             )
         write_lines(self.cpp_file, "    }", "")
 
-    def gen_ParsingExpression(self, node: ParsingExpressionsNode, next: str, return_type: CppType, rule_name: str, expr_index: int):
+    def gen_ParsingExpression(
+            self, node: ParsingExpressionsNode, next: str, return_type: CppType, rule_name: str, expr_index: int):
         group_index = 1
-        generated_exprs: list[GeneratedExpression] = []
+        generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
@@ -877,16 +882,22 @@ class CodeGenerator:
                 case ParsingExpressionCharacterClassNode():
                     generated_exprs.append(self.gen_ParsingExpressionCharacterClassNode(i, next))
                 case ParsingExpressionGroupNode():
-                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, rule_name, f"{expr_index}_{group_index}"))
+                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"group_{expr_index}_{group_index}"))
                     group_index += 1
                 case _:
                     self.gen_type_error(node)
 
         vars_declaration = ""
         for g in generated_exprs:
-            if var := g.user_defined_var:
-                vars_declaration += var
-                vars_declaration += "\n"
+            match g:
+                case GeneratedExpression():
+                    if var := g.user_defined_var:
+                        vars_declaration += var
+                        vars_declaration += "\n"
+                case GeneratedGroupExpression():
+                    if len(vars := g.user_defined_vars):
+                        vars_declaration += "\n".join(vars)
+                        vars_declaration += "\n"
 
         if len(vars_declaration) and node.action is None:
             assert False, f"Variables are declared, but the expression has no action, rule: '{rule_name}', expression: {expr_index}"
@@ -1129,62 +1140,108 @@ class CodeGenerator:
             code += "this->position++;\n"
         return GeneratedExpression(code, var)
 
-    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, rule_name: str, index: str) -> GeneratedExpression:
-        # TODO: implement storage of the result in a variable(node.ctx.name)
-        assert node.ctx.name is None, "Not implemented yet"
+    def gen_ParsingExpression_inside_group(
+            self, node: ParsingExpressionsNode, next: str, expr_index: int, prefix: str,) -> tuple[str, list[str]]:
+        group_index = 1
+        generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
+        for i in node.items:
+            match i:
+                case ParsingExpressionRuleNameNode():
+                    generated_exprs.append(self.gen_ParsingExpressionRuleName(i, next))
+                case ParsingExpressionStringNode():
+                    generated_exprs.append(self.gen_ParsingExpressionStringNode(i, next))
+                case ParsingExpressionCharacterClassNode():
+                    generated_exprs.append(self.gen_ParsingExpressionCharacterClassNode(i, next))
+                case ParsingExpressionGroupNode():
+                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"{prefix}_{expr_index}_{group_index}"))
+                    group_index += 1
+                case _:
+                    self.gen_type_error(node)
+
+        vars = []
+        for g in generated_exprs:
+            match g:
+                case GeneratedExpression():
+                    if var := g.user_defined_var:
+                        vars.append(var)
+                case GeneratedGroupExpression():
+                    vars.extend(g.user_defined_vars)
+
+        code = "{\n"
+        for g in generated_exprs:
+            code += add_indent(g.code, 4)
+            code += "\n"
+            code += f"    goto {prefix}_SUCCESS;\n"
+        code += "}\n"
+        return code, vars
+
+    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, prefix: str) -> GeneratedGroupExpression:
+        assert node.ctx.name is None, "Cannot assign a group to a variable"
 
         code = ""
-        fn_code = ""
-        function_name = f"{rule_name}_group_{index}"
+        vars = []
+        body = ""
 
-        fn_code += f"    bool Parser::{function_name}()\n"
-        fn_code += "    {\n"
-
-        fn_code += "        auto __mark = this->position;\n"
+        body += "auto __mark = this->position;\n"
         for i, parsing_expression in enumerate(node.parsing_expression):
             if i > 0:
-                fn_code += f"        NEXT_{i}:\n"
-                fn_code += "        this->position = __mark;\n"
-            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
-            fn_code += add_indent(self.gen_ParsingExpression(parsing_expression, next, CppType("bool"), function_name, i + 1), 8)
-            fn_code += "\n"
-
-        fn_code += "    FAIL:\n"
-        fn_code += "        this->position = __mark;\n"
-        fn_code += "        return false;\n"
-        fn_code += "    SUCCESS:\n"
-        fn_code += "        return true;\n"
-        fn_code += "    }\n\n"
-
-        self.hpp_file.write(f"        bool {function_name}();\n")
-        self.group_functions.append(fn_code)
+                body += f"{prefix}_NEXT_{i}:\n"
+                body += "this->position = __mark;\n"
+            group_next = f"{prefix}_NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else f"{prefix}_FAIL"
+            code_, vars_ = self.gen_ParsingExpression_inside_group(parsing_expression, group_next, i + 1, prefix)
+            body += code_
+            vars.extend(vars_)
+            body += "\n"
 
         if node.ctx.lookahead:
             code += "{\n"
-            code += "   size_t __tempMark = position;\n"
-            code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
-            code += f"{function_name}())) goto {next};\n"
-            code += "   position = __tempMark;\n"
+            code += add_indent(body, 4)
+            code += f"{prefix}_FAIL:\n"
+            code += "    this->position = __mark;\n"
+            if node.ctx.lookahead_positive:
+                code += f"    goto {next};\n"
+            else:
+                code += f"    goto {prefix}_END;\n"
+            code += f"{prefix}_SUCCESS:\n"
+            code += "    this->position = __mark;\n"
+            if not node.ctx.lookahead_positive:
+                code += f"    goto {next};\n"
+                code += f"{prefix}_END:;"
             code += "}\n"
         elif node.ctx.optional:
-            code += f"({function_name}());\n"
+            code += "{\n"
+            code += add_indent(body, 4)
+            code += f"{prefix}_FAIL:\n"
+            code += "    this->position = __mark;\n"
+            code += "    // fallthrough\n"
+            code += f"{prefix}_SUCCESS:;\n"
+            code += "}\n"
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
                 code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += f"        if (!({function_name}())) break;\n"
+            code += add_indent(body, 8)
+            code += f"    {prefix}_FAIL:\n"
+            code += "        this->position = __mark;\n"
+            code += "        break;\n"
+            code += f"    {prefix}_SUCCESS:;\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
             if node.ctx.loop_nonempty:
-                code += f"\n    if (!__i) goto {next};\n"
+                code += f"    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += f"if (!({function_name}())) goto {next};\n"
-
-        return GeneratedExpression(code, None)
+            code += "{\n"
+            code += add_indent(body, 4)
+            code += f"{prefix}_FAIL:\n"
+            code += "    this->position = __mark;\n"
+            code += f"    goto {next};\n"
+            code += f"{prefix}_SUCCESS:;\n"
+            code += "}\n"
+        return GeneratedGroupExpression(code, vars)
 
 
 def generate_parser(file):
