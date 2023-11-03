@@ -555,7 +555,7 @@ def add_indent(string: str, indent: int) -> str:
     new_lines = []
 
     for line in lines:
-        new_lines.append((' ' * indent + line) if line.strip() else '')
+        new_lines.append((' ' * indent + line.rstrip()) if line.strip() else '')
 
     return '\n'.join(new_lines)
 
@@ -564,7 +564,7 @@ def get_indent(string: str) -> int:
     return len(string) - len(string.lstrip())
 
 
-def outdent(string: str) -> str:
+def remove_indent(string: str) -> str:
     lines = string.split("\n")
     new_lines = []
     indent = min((get_indent(line) for line in lines if line != ''))
@@ -577,7 +577,7 @@ def outdent(string: str) -> str:
 
 
 def set_indent(string: str, indent: int) -> str:
-    return add_indent(outdent(string), indent)
+    return add_indent(remove_indent(string), indent)
 
 
 @dataclass
@@ -610,7 +610,6 @@ class CodeGenerator:
         self.root_rule = ""
         self.group_functions = []
         self.rules_return_type: dict[str, CppType] = dict()
-        self.type_analysis()
 
         if name_node := self.check_count_and_get_node(NameNode):
             self.parser_name = name_node.name
@@ -624,8 +623,11 @@ class CodeGenerator:
         if rule_type_node := self.check_count_and_get_node(RuleTypeNode):
             self.rule_type = rule_type_node.type_name
 
+        self.type_analysis()  # it should come after processing the %type directive
+
         if root_rule_node := self.check_count_and_get_node(RootRuleNode):
             self.root_rule = root_rule_node.name
+            assert self.root_rule in self.rules_return_type, f"The rule with the name '{self.root_rule}' does not exists"
 
     def check_count_and_get_node(self, node_type: typing.Type[RT]) -> RT | None:
         node = [node for node in self.root_node.statements if isinstance(node, node_type)]
@@ -660,7 +662,7 @@ class CodeGenerator:
         if parsing_expression.action is None or "$$" not in parsing_expression.action:
             return CppType("bool")
         else:
-            return CppType(self.rule_type, is_optional=True)
+            return CppType("ExprResult", is_optional=True)
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
@@ -681,7 +683,7 @@ class CodeGenerator:
             write_lines(
                 self.cpp_file,
                 "// code from %code",
-                self.code_from_directive,
+                remove_indent(self.code_from_directive),
                 "// end %code",
                 "",
             )
@@ -711,7 +713,7 @@ class CodeGenerator:
                 self.hpp_file,
                 "",
                 "// code from %hpp",
-                self.header_from_directive,
+                remove_indent(self.header_from_directive),
                 "// end %hpp",
             )
 
@@ -784,7 +786,7 @@ class CodeGenerator:
             "        return position - startLinePosition + 1;",
             "    }",
             "",
-            "    ExprResult Parser::parse()",
+            f"    {self.rules_return_type[self.root_rule]} Parser::parse()",
             "    {",
             "        this->position = 0;",
             f"        return {self.root_rule}();",
@@ -807,7 +809,7 @@ class CodeGenerator:
             "    public:",
             "        explicit Parser(std::string_view src);",
             "",
-            "        ExprResult parse();",
+            "        std::optional<ExprResult> parse();",
             "    };",
             "}",
             "",
@@ -1186,7 +1188,7 @@ class CodeGenerator:
 
 
 def generate_parser(file):
-    filename = os.path.basename(file.name)[0]
+    filename = os.path.basename(file.name).split(".")[0]
     tokenizer = Tokenizer(file)
     parser = Parser(tokenizer)
     root_node = parser.parse()
