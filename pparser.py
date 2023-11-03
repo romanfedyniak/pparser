@@ -52,6 +52,7 @@ class TokenType(enum.Enum):
     COLON = re.compile(r":")
     STRING = re.compile(r"\".+?(?<!\\)\"")
     CHARACTER_CLASS = re.compile(r"\[.+?(?<!\\)\]")
+    DOT = re.compile(r"\.")
     # special tokens
     CODE_SECTION = enum.auto()
     ACTION = enum.auto()
@@ -259,6 +260,11 @@ class ParsingExpressionCharacterClassNode(ParsingExpressionNode):
 
 
 @dataclass
+class ParsingExpressionDotNode(ParsingExpressionNode):
+    pass
+
+
+@dataclass
 class ParsingExpressionsNode(Node):
     items: list[ParsingExpressionNode]
     action: str | None
@@ -417,6 +423,9 @@ class Parser:
         with self.manager:
             string = escape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1], CHARACTER_CLASS_ESCAPE_TABLE)
             return ParsingExpressionCharacterClassNode(string)
+        with self.manager:
+            self.match(TokenType.DOT)
+            return ParsingExpressionDotNode()
         raise ParsingFail
 
     def parsing_expression_item(self):
@@ -884,6 +893,8 @@ class CodeGenerator:
                 case ParsingExpressionGroupNode():
                     generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"group_{expr_index}_{group_index}"))
                     group_index += 1
+                case ParsingExpressionDotNode():
+                    generated_exprs.append(self.gen_ParsingExpressionDotNode(i, next))
                 case _:
                     self.gen_type_error(node)
 
@@ -1155,6 +1166,8 @@ class CodeGenerator:
                 case ParsingExpressionGroupNode():
                     generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"{prefix}_{expr_index}_{group_index}"))
                     group_index += 1
+                case ParsingExpressionDotNode():
+                    generated_exprs.append(self.gen_ParsingExpressionDotNode(i, next))
                 case _:
                     self.gen_type_error(node)
 
@@ -1242,6 +1255,52 @@ class CodeGenerator:
             code += f"{prefix}_SUCCESS:;\n"
             code += "}\n"
         return GeneratedGroupExpression(code, vars)
+
+    def gen_ParsingExpressionDotNode(self, node: ParsingExpressionDotNode, next: str) -> GeneratedExpression:
+        code = ""
+        var = ""
+
+        if node.ctx.lookahead:
+            if not node.ctx.lookahead_positive:
+                assert node.ctx.name is None, "'!.' cannot be assigned to a variable"
+                code += f"if (this->position < this->src.size()) goto {next};\n"
+            code += f"if (this->position >= this->src.size()) goto {next};\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = this->src[this->position];\n"
+            code += "this->position++;\n"
+        elif node.ctx.optional:
+            code += "if (this->position < this->src.size())\n"
+            code += "{\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"    {node.ctx.name} = this->src[this->position];\n"
+            code += "    this->position++;\n"
+            code += "}\n"
+        elif node.ctx.loop:
+            code += "{\n"
+            if node.ctx.loop_nonempty:
+                code += "    size_t __i = 0;\n"
+            code += "    for (;;)\n"
+            code += "    {\n"
+            code += "        if (this->position >= this->src.size()) break;\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"        {node.ctx.name} += this->src[this->position];\n"
+            code += "        this->position++;\n"
+            if node.ctx.loop_nonempty:
+                code += "        __i++;\n"
+            code += "    }\n"
+            if node.ctx.loop_nonempty:
+                code += f"    if (!__i) goto {next};\n"
+            code += "}\n"
+        else:
+            code += f"if (this->position >= this->src.size()) goto {next};\n"
+            if node.ctx.name:
+                var = f"std::string {node.ctx.name};"
+                code += f"{node.ctx.name} = this->src[this->position];\n"
+            code += "this->position++;\n"
+        return GeneratedExpression(code, var)
 
 
 def generate_parser(file):
