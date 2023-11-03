@@ -1005,7 +1005,7 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
-                code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
+                code += f"if (this->position + {str_len - 1} >= this->src.size()) goto {next};\n"
                 code += "if (!(true\n"
                 code += str_condition
                 code += f")) goto {next};\n"
@@ -1020,7 +1020,7 @@ class CodeGenerator:
                 var = f"std::string {node.ctx.name};"
                 code += f"{node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
         elif node.ctx.optional:
-            code += f"if (this->position + {str_len - 1} <= this->src.size())\n"
+            code += f"if (this->position + {str_len - 1} < this->src.size())\n"
             code += "{\n"
             code += "    if ((true\n"
             code += add_indent(str_condition, 4)
@@ -1038,7 +1038,7 @@ class CodeGenerator:
                 code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += f"        if (this->position + {str_len - 1} > this->src.size()) break;\n"
+            code += f"        if (this->position + {str_len - 1} >= this->src.size()) break;\n"
             code += "        if (!(true\n"
             code += add_indent(str_condition, 8)
             code += "        )) break;\n"
@@ -1053,7 +1053,7 @@ class CodeGenerator:
                 code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += f"if (this->position + {str_len - 1} > this->src.size()) goto {next};\n"
+            code += f"if (this->position + {str_len - 1} >= this->src.size()) goto {next};\n"
             code += "if (!(true\n"
             code += str_condition
             code += f")) goto {next};\n"
@@ -1092,7 +1092,7 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
-                code += f"if (this->position > this->size()) goto {next};\n"
+                code += f"if (this->position >= this->size()) goto {next};\n"
                 code += "if (!(false\n"
                 code += condition
                 code += f")) goto {next};\n"
@@ -1126,7 +1126,7 @@ class CodeGenerator:
                 code += "    size_t __i = 0;\n"
             code += "    for(;;)\n"
             code += "    {\n"
-            code += "        if (this->position > this->src.size()) break;\n"
+            code += "        if (this->position >= this->src.size()) break;\n"
             code += "        if (!(false\n"
             code += add_indent(condition, 8)
             code += "        )) break;\n"
@@ -1141,7 +1141,7 @@ class CodeGenerator:
                 code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += f"if (this->position > this->src.size()) goto {next};\n"
+            code += f"if (this->position >= this->src.size()) goto {next};\n"
             code += "if (!(false\n"
             code += condition
             code += f")) goto {next};\n"
