@@ -99,7 +99,7 @@ Statement = Value # starts from here
 ### Rules
 Syntax:
 ```
-<RuleName> = <parsing expressions>
+<RuleName> = <parsing expressions> { <c++ code> }
 ```
 - RuleName - this is the name of a rule, and it can consist of letters, digits, and underscores, but it cannot start with a digit. Names are case-sensitive.
 
@@ -179,6 +179,17 @@ Rule =
     | "foo"
     | "bar"
     | "baz"
+```
+
+#### Action
+The action is arbitrary C++ code that executes at the end of the match.
+```
+Rule = [0-9]+ { std::cout << "number\n"; }
+```
+
+Inside an action, you can use '`$$`', which represents the output variable. The type of this variable is determined by the `%type` directive, or if it is not defined, it defaults to `size_t`.
+```
+Rule = "42" { $$ = 42; }
 ```
 
 ## License
