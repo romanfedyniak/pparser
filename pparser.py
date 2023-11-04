@@ -467,6 +467,7 @@ class Parser:
         with self.manager:
             id = self.match(TokenType.IDENTIFIER)
             self.match(TokenType.COLON)
+            self.lookahead(False, TokenType.LPAR)  # a group cannot be assigned to a variable
             item = self.parsing_expression_item()
             item.ctx.name = id
             return item
