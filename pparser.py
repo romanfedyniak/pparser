@@ -803,7 +803,7 @@ class CodeGenerator:
             f"    {self.rules_return_type[self.root_rule]} Parser::parse()",
             "    {",
             "        this->position = 0;",
-            f"        return {self.root_rule}();",
+            f"        return rule__{self.root_rule}();",
             "    }",
             "",
             "    Parser::Parser(std::string_view src) : src(src) {}",
@@ -850,10 +850,10 @@ class CodeGenerator:
 
     def gen_Rule(self, node: RuleNode):
         return_type = self.rules_return_type[node.name]
-        write_lines(self.hpp_file, f"        {return_type} {node.name}();")
+        write_lines(self.hpp_file, f"        {return_type} rule__{node.name}();")
         write_lines(
             self.cpp_file,
-            f"    {return_type} Parser::{node.name}()",
+            f"    {return_type} Parser::rule__{node.name}()",
             "    {",
         )
         code = "auto __mark = this->position;\n"
@@ -952,7 +952,7 @@ class CodeGenerator:
             if node.ctx.name:
                 code += "auto __result = "
                 var = f"{return_type.type_} {node.ctx.name};"
-            code += f"{node.name}())) goto {next};\n"
+            code += f"rule__{node.name}())) goto {next};\n"
             if node.ctx.name:
                 code += f"else {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
             code += "   position = __tempMark;\n"
@@ -961,7 +961,7 @@ class CodeGenerator:
             if node.ctx.name:
                 var = f"{return_type.type_} {node.ctx.name};"
                 code += "auto __result = "
-            code += f"({node.name}());\n"
+            code += f"(rule__{node.name}());\n"
             if node.ctx.name:
                 code += f"{node.ctx.name} = __result.value();\n"
         elif node.ctx.loop:
@@ -972,7 +972,7 @@ class CodeGenerator:
                 code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += f"        if (!({'auto __result = ' if node.ctx.name else ''} {node.name}())) break;\n"
+            code += f"        if (!({'auto __result = ' if node.ctx.name else ''} rule__{node.name}())) break;\n"
             if node.ctx.name:
                 code += f"        {node.ctx.name}.push_back(__result{'.value()' if return_type.is_optional else ''});\n"
             if node.ctx.loop_nonempty:
@@ -989,7 +989,7 @@ class CodeGenerator:
             code += "    if (!("
             if node.ctx.name:
                 code += "__result = "
-            code += f"{node.name}())) goto {next};\n"
+            code += f"rule__{node.name}())) goto {next};\n"
             if node.ctx.name:
                 code += f"    {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
             code += "}\n"
