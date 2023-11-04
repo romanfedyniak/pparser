@@ -1339,7 +1339,7 @@ class CodeGenerator:
         for g in generated_exprs:
             code += add_indent(g.code, 4)
             code += "\n"
-            code += f"    goto {prefix}_SUCCESS;\n"
+        code += f"    goto {prefix}_SUCCESS;\n"
         code += "}\n"
         return code, vars
 
@@ -1416,7 +1416,8 @@ class CodeGenerator:
         if node.ctx.lookahead:
             if not node.ctx.lookahead_positive:
                 code += f"if (this->position < this->src.size()) goto {next};\n"
-            code += f"if (this->position >= this->src.size()) goto {next};\n"
+            else:
+                code += f"if (this->position >= this->src.size()) goto {next};\n"
             if node.ctx.name:
                 var = f"std::string {node.ctx.name};"
                 code += f"{node.ctx.name} = this->src[this->position];\n"
