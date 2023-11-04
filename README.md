@@ -129,6 +129,12 @@ Rule = SecondRule
 SecondRule = "hello"
 ```
 
+- Dot - matches any single character. Fails only when the input has ended.
+```
+AnyCharacter = .
+
+```
+
 #### Operators
 Various operators can also be applied to the elements mentioned above:
 
@@ -140,6 +146,7 @@ Rule1 = "hello" &" world"
 - `!` - not-predicate. The same as an and-predicate, but true only if the element does not exist.
 ```
 Rule = "hello" !" world"
+EOF = !. # if use a not-predicate with dot, you can determine if the input has ended
 ```
 
 - `*` - zero-or-more. Consumes zero or more occurrences of the element. Always true.
