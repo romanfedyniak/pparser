@@ -22,6 +22,7 @@
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from functools import reduce
 from io import TextIOWrapper
 import argparse
 import typing
@@ -589,6 +590,13 @@ def set_indent(string: str, indent: int) -> str:
     return add_indent(remove_indent(string), indent)
 
 
+def get_return_type_of_parsing_expression_sequence(parsing_expression: ParsingExpressionsNode) -> "CppType":
+    if parsing_expression.action is None or "$$" not in parsing_expression.action:
+        return CppType("bool")
+    else:
+        return CppType("ExprResult", is_optional=True)
+
+
 @dataclass
 class GeneratedExpression:
     code: str
@@ -612,6 +620,182 @@ class CppType:
         return self.type_
 
 
+class StaticAnalyzer:
+    def __init__(self, root_node: BlockStatementNode, filename: str):
+        self.root_node = root_node
+        self.filename = filename
+
+    def analyze(self):
+        self.same_rule_names()
+        self.check_directives()
+        self.check_rule_name_in_root_directive()
+        self.check_action_presence()  # check for the presence of an action when variables are present
+        self.same_var_names_in_parsing_expr_sequence()
+        self.group_with_repetition_has_variables_inside()
+        self.lookahead_false_with_dot_assigned_to_var()
+        # The return types in all parsing expression sequences must match within the rule
+        self.check_return_types_in_parsing_expression_sequences()
+        self.check_characters_inside_character_class()
+
+    def same_rule_names(self):
+        rule_names = self.get_rule_names()
+        for i, rule_name in enumerate(rule_names[:-1], 1):
+            for rule_name_ in rule_names[i:]:
+                if rule_name == rule_name_:
+                    self.error(f"Rule '{rule_name}' has more than one definition")
+
+    def check_directives(self):
+        error_message = "The '%{}' directive has more than one definition"
+        if self.get_node_count(NameNode) > 1:
+            self.error(error_message.format("name"))
+        if self.get_node_count(HeaderBlockNode) > 1:
+            self.error(error_message.format("hpp"))
+        if self.get_node_count(CodeBlockNode) > 1:
+            self.error(error_message.format("cpp"))
+        if self.get_node_count(RuleTypeNode) > 1:
+            self.error(error_message.format("type"))
+        if self.get_node_count(RootRuleNode) > 1:
+            self.error(error_message.format("root"))
+
+    def check_rule_name_in_root_directive(self):
+        if root_rule_node := self.get_node_or_none(RootRuleNode):
+            if root_rule_node.name not in self.get_rule_names():
+                self.error(f"The directive '%root' contains a non-existing rule: '{root_rule_node.name}'")
+
+    def check_action_presence(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for parsing_expression_sequence in rule.parsing_expression:
+                    is_var_presence = False
+                    for item in parsing_expression_sequence.items:
+                        if isinstance(group := item, ParsingExpressionGroupNode):
+                            if len(self.get_vars_from_group(group)):
+                                is_var_presence = True
+                                break
+                        if item.ctx.name:
+                            is_var_presence = True
+                            break
+                    if is_var_presence and parsing_expression_sequence.action is None:
+                        self.error(f"In the '{rule.name}' rule variables are declared, but there is no action")
+
+    def same_var_names_in_parsing_expr_sequence(self):
+        error_message = "In the '{}' rule, variable '{}' is declared multiple times"
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for parsing_expression_sequence in rule.parsing_expression:
+                    var_names = []
+                    for item in parsing_expression_sequence.items:
+                        if isinstance(group := item, ParsingExpressionGroupNode):
+                            for var in self.get_vars_from_group(group):
+                                if var in var_names:
+                                    self.error(error_message.format(rule.name, var))
+                                var_names.append(var)
+                        if (var := item.ctx.name):
+                            if var in var_names:
+                                self.error(error_message.format(rule.name, var))
+                            var_names.append(var)
+
+    def group_with_repetition_has_variables_inside(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for parsing_expression_sequence in rule.parsing_expression:
+                    for item in parsing_expression_sequence.items:
+                        if isinstance(group := item, ParsingExpressionGroupNode):
+                            if group.ctx.loop and len(self.get_vars_from_group(group)):
+                                self.error(f"In the '{rule.name}' rule, the group uses variables inside itself"
+                                           " and repetitions operators simultaneously")
+
+    def lookahead_false_with_dot_assigned_to_var(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for parsing_expression_sequence in rule.parsing_expression:
+                    for item in parsing_expression_sequence.items:
+                        if isinstance(dot := item, ParsingExpressionDotNode):
+                            if dot.ctx.lookahead and not dot.ctx.lookahead_positive and dot.ctx.name:
+                                self.error(f"In the '{rule.name}' rule, '!.' cannot be assigned to a variable")
+
+    def check_return_types_in_parsing_expression_sequences(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                if len(rule.parsing_expression) > 1:
+                    return_type = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
+                    for parsing_expression_sequence in rule.parsing_expression[1:]:
+                        if return_type != get_return_type_of_parsing_expression_sequence(parsing_expression_sequence):
+                            self.error(f"In the '{rule.name}', parsing expression sequences return different types")
+
+    def check_characters_inside_character_class(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for parsing_expression_sequence in rule.parsing_expression:
+                    for item in parsing_expression_sequence.items:
+                        if isinstance(character_class := item, ParsingExpressionCharacterClassNode):
+                            characters = []
+                            ranges: list[tuple[str, str]] = []
+                            i = 0
+                            while i < len(character_class.characters):
+                                ch = character_class.characters[i]
+                                if i + 2 < len(character_class.characters) and character_class.characters[i + 1] == "-":
+                                    from_ = ch
+                                    to = character_class.characters[i + 2]
+                                    error_message = (
+                                            f"In the '{rule.name}' rule, inside the character class"
+                                            f" '[{repr(character_class.characters)[1:-1]}]',"
+                                            " {}"
+                                            f" '{repr(from_)[1:-1]}-{repr(to)[1:-1]}'"
+                                    )
+                                    if from_ == to:
+                                        self.error(error_message.format("the first and second characters in the range are the same"))
+                                    elif ord(from_) > ord(to):
+                                        self.error(error_message.format("the first character is 'greater' than the second in a range"))
+                                    i += 2
+                                    ranges.append((from_, to))
+                                else:
+                                    if ch in characters:
+                                        self.error(f"In the '{rule.name}' rule, the character class has the same characters: {repr(ch)}")
+                                    characters.append(ch)
+                                i += 1
+
+                            for from_, to in ranges:
+                                for ch in characters:
+                                    if ord(ch) >= ord(from_) and ord(ch) <= ord(to):
+                                        self.error(
+                                            f"In the '{rule.name}' rule, inside the character class"
+                                            f" '[{repr(character_class.characters)[1:-1]}]',"
+                                            f" the character '{repr(ch)[1:-1]}' intersects with the range"
+                                            f" '{repr(from_)[1:-1]}-{repr(to)[1:-1]}'"
+                                        )
+
+    def get_rule_names(self) -> list[str]:
+        rule_names = []
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                rule_names.append(rule.name)
+        return rule_names
+
+    def get_node_count(self, node_type: typing.Type[Node]) -> int:
+        function = (lambda count, item: count + (1 if isinstance(item, node_type) else 0))
+        return reduce(function, self.root_node.statements, 0)
+
+    def get_node_or_none(self, node_type: typing.Type[RT]) -> RT | None:
+        for item in self.root_node.statements:
+            if isinstance(item, node_type):
+                return item
+
+    def get_vars_from_group(self, group: ParsingExpressionGroupNode) -> list[str]:
+        vars = []
+        for parsing_expression_sequences in group.parsing_expression:
+            for item in parsing_expression_sequences.items:
+                if isinstance(group_ := item, ParsingExpressionGroupNode):
+                    vars.extend(self.get_vars_from_group(group_))
+                elif (var := item.ctx.name):
+                    vars.append(var)
+        return vars
+
+    def error(self, message: str) -> typing.NoReturn:
+        print(message, file=sys.stderr)
+        sys.exit(1)
+
+
 class CodeGenerator:
     cpp_file: TextIOWrapper
     hpp_file: TextIOWrapper
@@ -626,58 +810,35 @@ class CodeGenerator:
         self.root_rule = ""
         self.rules_return_type: dict[str, CppType] = dict()
 
-        if name_node := self.check_count_and_get_node(NameNode):
+        if name_node := self.get_node_or_none(NameNode):
             self.parser_name = name_node.name
 
-        if header_node := self.check_count_and_get_node(HeaderBlockNode):
+        if header_node := self.get_node_or_none(HeaderBlockNode):
             self.header_from_directive = header_node.header
 
-        if code_node := self.check_count_and_get_node(CodeBlockNode):
+        if code_node := self.get_node_or_none(CodeBlockNode):
             self.code_from_directive = code_node.code
 
-        if rule_type_node := self.check_count_and_get_node(RuleTypeNode):
+        if rule_type_node := self.get_node_or_none(RuleTypeNode):
             self.rule_type = rule_type_node.type_name
 
         self.type_analysis()  # it should come after processing the %type directive
 
-        if root_rule_node := self.check_count_and_get_node(RootRuleNode):
+        if root_rule_node := self.get_node_or_none(RootRuleNode):
             self.root_rule = root_rule_node.name
-            assert self.root_rule in self.rules_return_type, f"The rule with the name '{self.root_rule}' does not exists"
 
-    def check_count_and_get_node(self, node_type: typing.Type[RT]) -> RT | None:
+    def get_node_or_none(self, node_type: typing.Type[RT]) -> RT | None:
         node = [node for node in self.root_node.statements if isinstance(node, node_type)]
-        if len(node) > 1:
-            name = ""
-            if node_type == NameNode:
-                name = "name"
-            elif node_type == CodeBlockNode:
-                name = "cpp"
-            elif node_type == RuleTypeNode:
-                name = "type"
-            elif node_type == RootRuleNode:
-                name = "root"
-            print(f"there can be only one %{name} directive", file=sys.stderr)
-            exit(1)
-        if len(node):
-            return node[0]
+        for node in self.root_node.statements:
+            if isinstance(node, node_type):
+                return node
         return None
 
     def type_analysis(self):
         for node in self.root_node.statements:
             if not isinstance(node, RuleNode):
                 continue
-            assert not (node.name in self.rules_return_type), f"Rule '{node.name}' has more than one definition"
-            type_ = self.get_return_type_parsing_expression(node.parsing_expression[0])
-            for parsing_expression in node.parsing_expression[1:]:
-                assert type_ == self.get_return_type_parsing_expression(parsing_expression), \
-                       f"In rule '{node.name}', options return different types"
-            self.rules_return_type[node.name] = type_
-
-    def get_return_type_parsing_expression(self, parsing_expression: ParsingExpressionsNode) -> CppType:
-        if parsing_expression.action is None or "$$" not in parsing_expression.action:
-            return CppType("bool")
-        else:
-            return CppType("ExprResult", is_optional=True)
+            self.rules_return_type[node.name] = get_return_type_of_parsing_expression_sequence(node.parsing_expression[0])
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
@@ -911,9 +1072,6 @@ class CodeGenerator:
                         vars_declaration += "\n".join(vars)
                         vars_declaration += "\n"
 
-        if len(vars_declaration) and node.action is None:
-            assert False, f"Variables are declared, but the expression has no action, rule: '{rule_name}', expression: {expr_index}"
-
         code = "{\n"
         if len(vars_declaration):
             code += "    // User defined variables\n"
@@ -1073,11 +1231,6 @@ class CodeGenerator:
         while i < len(characters):
             ch = characters[i]
             if i + 2 < len(characters) and characters[i + 1] == "-":
-                assert ch != characters[i + 2], ("The same characters in a range inside character class:"
-                                                 f" [{characters}], '{ch}-{characters[i + 2]}'")
-                assert ord(ch) < ord(characters[i + 2]), ("The first character is 'greater' than the second in a range"
-                                                          f" inside character class: [{characters}],"
-                                                          f" '{ch}-{characters[i + 2]}'")
                 condition += f"    || this->src[this->position] >= {ord(ch)}"
                 condition += f" && this->src[this->position] <= {ord(characters[i + 2])} // {repr(ch)}, {repr(characters[i + 2])}\n"
                 i += 2
@@ -1190,8 +1343,6 @@ class CodeGenerator:
         return code, vars
 
     def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, prefix: str) -> GeneratedGroupExpression:
-        assert node.ctx.name is None, "Cannot assign a group to a variable"
-
         code = ""
         vars = []
         body = ""
@@ -1263,7 +1414,6 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             if not node.ctx.lookahead_positive:
-                assert node.ctx.name is None, "'!.' cannot be assigned to a variable"
                 code += f"if (this->position < this->src.size()) goto {next};\n"
             code += f"if (this->position >= this->src.size()) goto {next};\n"
             if node.ctx.name:
@@ -1309,6 +1459,8 @@ def generate_parser(file):
     tokenizer = Tokenizer(file)
     parser = Parser(tokenizer)
     root_node = parser.parse()
+    static_analyzer = StaticAnalyzer(root_node, filename)
+    static_analyzer.analyze()
     code_gen = CodeGenerator(root_node, filename)
     code_gen.start()
 
