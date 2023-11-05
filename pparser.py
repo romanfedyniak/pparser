@@ -1135,7 +1135,7 @@ class CodeGenerator:
                 code += "auto __result = "
             code += f"(rule__{node.name}());\n"
             if node.ctx.name:
-                code += f"{node.ctx.name} = __result.value();\n"
+                code += f"if (__result) {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
         elif node.ctx.loop:
             if node.ctx.name:
                 var = f"std::vector<{return_type.type_}> {node.ctx.name};"
