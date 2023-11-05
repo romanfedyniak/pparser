@@ -632,7 +632,7 @@ class StaticAnalyzer:
         self.check_action_presence()  # check for the presence of an action when variables are present
         self.same_var_names_in_parsing_expr_sequence()
         self.group_with_repetition_has_variables_inside()
-        self.lookahead_false_with_dot_assigned_to_var()
+        self.lookahead_false_assigned_to_var()
         # The return types in all parsing expression sequences must match within the rule
         self.check_return_types_in_parsing_expression_sequences()
         self.check_characters_inside_character_class()
@@ -705,14 +705,14 @@ class StaticAnalyzer:
                                 self.error(f"In the '{rule.name}' rule, the group uses variables inside itself"
                                            " and repetitions operators simultaneously")
 
-    def lookahead_false_with_dot_assigned_to_var(self):
+    def lookahead_false_assigned_to_var(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
                 for parsing_expression_sequence in rule.parsing_expression:
                     for item in parsing_expression_sequence.items:
-                        if isinstance(dot := item, ParsingExpressionDotNode):
-                            if dot.ctx.lookahead and not dot.ctx.lookahead_positive and dot.ctx.name:
-                                self.error(f"In the '{rule.name}' rule, '!.' cannot be assigned to a variable")
+                        if item.ctx.lookahead and not item.ctx.lookahead_positive and item.ctx.name:
+                            self.error(f"In the '{rule.name}' rule, a parsing expression with the '!' operator"
+                                       " cannot be assigned to a variable")
 
     def check_return_types_in_parsing_expression_sequences(self):
         for statement in self.root_node.statements:
@@ -1176,8 +1176,8 @@ class CodeGenerator:
                 code += f"    ) goto {next};\n"
                 code += "}\n"
             if node.ctx.name:
-                var = f"std::string {node.ctx.name};"
-                code += f"{node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
+                var = f"bool {node.ctx.name} = false;"
+                code += f"{node.ctx.name} = true;\n"
         elif node.ctx.optional:
             code += f"if (this->position + {str_len - 1} < this->src.size())\n"
             code += "{\n"
@@ -1186,8 +1186,8 @@ class CodeGenerator:
             code += "    ))\n"
             code += "    {\n"
             if node.ctx.name:
-                var = f"std::optional<std::string> {node.ctx.name};"
-                code += f"        {node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
+                var = f"bool {node.ctx.name} = false;"
+                code += f"        {node.ctx.name} = true;\n"
             code += f"        this->position += {str_len};\n"
             code += "    }\n"
             code += "}\n"
@@ -1202,8 +1202,8 @@ class CodeGenerator:
             code += add_indent(str_condition, 8)
             code += "        )) break;\n"
             if node.ctx.name:
-                var = f"std::vector<std::string> {node.ctx.name};"
-                code += f"        {node.ctx.name}.push_back(\"{repr(node.value)[1:-1]}\");\n"
+                var = f"size_t {node.ctx.name};"
+                code += f"        {node.ctx.name}++;\n"
             code += f"        this->position += {str_len};\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
@@ -1217,8 +1217,8 @@ class CodeGenerator:
             code += str_condition
             code += f")) goto {next};\n"
             if node.ctx.name:
-                var = f"std::string {node.ctx.name};"
-                code += f"{node.ctx.name} = \"{repr(node.value)[1:-1]}\";\n"
+                var = f"bool {node.ctx.name} = false;"
+                code += f"{node.ctx.name} = true;\n"
             code += f"this->position += {str_len};\n"
         return GeneratedExpression(code, var)
 
