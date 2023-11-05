@@ -14,7 +14,6 @@ calc.peg:
 ```
 %name calc
 
-# comment
 %type "int"
 %root Sum
 
@@ -99,11 +98,11 @@ Statement = Value # starts from here
 ### Rules
 Syntax:
 ```
-<RuleName> = <parsing expressions> { <c++ code> }
+<RuleName> = <parsing expression sequence> { <c++ code> }
 ```
 - RuleName - this is the name of a rule, and it can consist of letters, digits, and underscores, but it cannot start with a digit. Names are case-sensitive.
 
-- parsing expression - this is the expression being parsed. Separated by spaces, checked from left to right.
+- parsing expression sequence - this is the expression being parsed. Separated by spaces, checked from left to right.
 
 ```
 Rule = "1" "2" "3"
@@ -123,16 +122,15 @@ Rule = [abcd]
 Hexadecimal = [0-9a-fA-F] # matches a single hexadecimal digit
 ```
 
+- Dot - matches any single character. Fails only when the input has ended.
+```
+AnyCharacter = .
+```
+
 - Another rule - invokes another rule.
 ```
 Rule = SecondRule
 SecondRule = "hello"
-```
-
-- Dot - matches any single character. Fails only when the input has ended.
-```
-AnyCharacter = .
-
 ```
 
 #### Operators
@@ -169,7 +167,7 @@ Rule = "hello" "world"?
 Rule = "1" ("2" "3")
 ```
 
-- `|` - the choice operator. Specifies alternative options. If the expression on the left succeeds, returns it; if not, moves to the expression on the right and executes it. If both expressions fail, returns false.
+- `|` - the choice operator. Splits parsing expression sequence into several different sequences. If the sequence on the left succeeds, returns it; if not, moves to the sequence on the right and executes it. If both sequences fail, returns false.
 ```
 Rule = "foo" | "bar" | "baz"
 Rule = [123456789] " " ("+" | "-" | "*" | "/") [123456789]
@@ -191,6 +189,67 @@ Inside an action, you can use '`$$`', which represents the output variable. The 
 ```
 Rule = "42" { $$ = 42; }
 ```
+
+#### Variable
+You can assign a name to any parsing expression in a rule; this will create a variable that can be used in an action. An exception is the '!' operator; if this operator is used, it is not possible to assign the expression to a variable.
+```
+Number = number:[0-9]+ { $$ = std::stoi(number); }
+```
+Each parsing expression has its own C++ return type, which also depends on the operators used.
++ String
+    + "string" - it is not possible to assign to a variable
+    + "string"+ or "string"* - `size_t` (the number of repetitions of the string)
+    + "string"? - `bool`
+    + &"string" - it is not possible to assign to a variable
++ Character class
+    + [a-z] - `std::string`
+    + [a-z]+ or [a-z]* - `std::string`
+    + [a-z]? - `std::optional<std::string>`
+    + &[a-z] - `std::string`
++ Dot
+    + . - `std::string`
+    + .+ or .* - `std::string`
+    + .? - `std::optional<std::string>`
+    + &. - `std::string`
++ Group - returns a string consisting of matches within a group
+    + ("1" | "2") - `std::string`
+    + ("1" | "2")+ or ("1" | "2")* - `std::string`
+    + ("1" | "2")? - `std::optional<std::string>`
+    + &("1" | "2") - `std::string`
++ Another rule
+    + Rule - `the type returned by the invoked rule`
+    + Rule+ or Rule* - `std::vector<the type returned by the invoked rule>`
+    + Rule? - `std::optional<the type returned by the invoked rule>`
+    + &Rule - `the type returned by the invoked rule`
+
+#### Rule return type
+The return type of a rule is the return type of the parsing expression sequences. There can only be one return type in a rule, so all sequences of parsing expressions must return the same type.
+```
+# correct, all sequences return bool
+Rule =
+    | "1"
+    | "2"
+    | "3"
+
+# incorrect, the return types of the sequences are different
+Rule =
+    | "1"
+    | "2"
+    | n:"3" { $$=std::stoi(n) }
+```
+If no action is defined with the variable '`$$`', the return type is `bool`. If variable '`$$`' is not defined, the return type is determined by the `%type` directive, or if the directive is not defined, it defaults to `size_t`.
+
+## C++ API
+The parser is defined in the `PParser` namespace and is named `Parser`.
+```cpp
+Parser::Parser(std::string_view src);
+```
+Constructor. Accepts a sequence of characters to be parsed
+
+```cpp
+Parser::Result Parser::parse();
+```
+Initiates parsing. The return type depends on the root rule; it can be either `bool` or the type specified in the `%type` directive wrapped in `std::optional`
 
 ## License
 [MIT](LICENSE)
