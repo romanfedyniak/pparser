@@ -1117,7 +1117,7 @@ class CodeGenerator:
             code += "}\n"
         elif node.ctx.optional:
             if node.ctx.name:
-                var = f"{return_type.type_} {node.ctx.name};"
+                var = f"std::optional<{return_type.type_}> {node.ctx.name};"
                 code += "auto __result = "
             code += f"(rule__{node.name}());\n"
             if node.ctx.name:
@@ -1269,7 +1269,7 @@ class CodeGenerator:
             code += "    ))\n"
             code += "    {\n"
             if node.ctx.name:
-                var = f"std::string {node.ctx.name};"
+                var = f"std::optional<std::string> {node.ctx.name};"
                 code += f"        {node.ctx.name} = this->src[this->position];\n"
             code += "        this->position++;\n"
             code += "    }\n"
@@ -1411,9 +1411,12 @@ class CodeGenerator:
             code += "}\n"
 
         if node.ctx.name:
-            vars.append(f"std::string {node.ctx.name};")
-            code += f"{node.ctx.name} = std::string{{this->src.substr({prefix}_start_position,"
-            code += f" this->position - {prefix}_start_position)}};\n"
+            vars.append(f"{'std::optional<std::string>' if node.ctx.optional else'std::string'} {node.ctx.name};")
+            code += f"if (this->position != {prefix}_start_position)\n"
+            code += "{\n"
+            code += f"    {node.ctx.name} = std::string{{this->src.substr({prefix}_start_position,"
+            code += f"    this->position - {prefix}_start_position)}};\n"
+            code += "}\n"
         return GeneratedGroupExpression(code, vars)
 
     def gen_ParsingExpressionDotNode(self, node: ParsingExpressionDotNode, next: str) -> GeneratedExpression:
@@ -1433,7 +1436,7 @@ class CodeGenerator:
             code += "if (this->position < this->src.size())\n"
             code += "{\n"
             if node.ctx.name:
-                var = f"std::string {node.ctx.name};"
+                var = f"std::optional<std::string> {node.ctx.name};"
                 code += f"    {node.ctx.name} = this->src[this->position];\n"
             code += "    this->position++;\n"
             code += "}\n"
