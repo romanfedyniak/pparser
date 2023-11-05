@@ -277,7 +277,7 @@ class RuleNode(Node):
     parsing_expression: list[ParsingExpressionsNode]
 
 
-STRING_ESCAPE_TABLE = {
+STRING_UNESCAPE_TABLE = {
     "\\": "\\",
     "a": "\a",
     "b": "\b",
@@ -288,14 +288,14 @@ STRING_ESCAPE_TABLE = {
     "v": "\v",
 }
 
-CHARACTER_CLASS_ESCAPE_TABLE = STRING_ESCAPE_TABLE.copy()
-CHARACTER_CLASS_ESCAPE_TABLE.update({
+CHARACTER_CLASS_UNESCAPE_TABLE = STRING_UNESCAPE_TABLE.copy()
+CHARACTER_CLASS_UNESCAPE_TABLE.update({
     "]": "]",
     "[": "[",
 })
 
 
-def escape_string(string: str, table: dict[str, str]) -> str:
+def unescape_string(string: str, table: dict[str, str]) -> str:
     new_string = ""
     i = 0
     while i < len(string) - 1:
@@ -314,6 +314,25 @@ def escape_string(string: str, table: dict[str, str]) -> str:
 
     return new_string
 
+
+def escape_string(string: str) -> str:
+    escape_table = {
+        "\a": "a",
+        "\b": "b",
+        "\f": "f",
+        "\n": "n",
+        "\r": "r",
+        "\t": "t",
+        "\v": "v",
+    }
+    new_string = ""
+    for ch in string:
+        if ch in escape_table:
+            new_string += "\\"
+            new_string += escape_table[ch]
+        else:
+            new_string += ch
+    return new_string
 
 class ParsingFail(Exception):
     pass
@@ -413,7 +432,7 @@ class Parser:
             self.lookahead(False, TokenType.EQUAL)
             return ParsingExpressionRuleNameNode(id)
         with self.manager:
-            string = escape_string(self.match(TokenType.STRING)[1:-1], STRING_ESCAPE_TABLE)
+            string = unescape_string(self.match(TokenType.STRING)[1:-1], STRING_UNESCAPE_TABLE)
             return ParsingExpressionStringNode(string)
         with self.manager:
             self.match(TokenType.LPAR)
@@ -422,7 +441,7 @@ class Parser:
             self.match(TokenType.RPAR)
             return group
         with self.manager:
-            string = escape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1], CHARACTER_CLASS_ESCAPE_TABLE)
+            string = unescape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1], CHARACTER_CLASS_UNESCAPE_TABLE)
             return ParsingExpressionCharacterClassNode(string)
         with self.manager:
             self.match(TokenType.DOT)
@@ -1132,11 +1151,20 @@ class CodeGenerator:
     def gen_ParsingExpressionStringNode(self, node: ParsingExpressionStringNode, next: str) -> GeneratedExpression:
         var = None
         code = ""
-        str_len = len(node.value)
+        str_bytes = node.value.encode()
+        str_len = len(str_bytes)
         str_condition = ""
-        for i, ch in enumerate(node.value):
-            assert not (ord(ch) > 256), "Unicode not supported in strings"
-            str_condition += f"   && this->src[this->position + {i}] == {ord(ch)} // {repr(ch)}\n"
+
+        i = 0
+        for ch in node.value:
+            if ord(ch) < 255:
+                str_condition += f"   && this->src[this->position + {i}] == '{escape_string(ch)}'\n"
+                i += 1
+            else:
+                str_condition += f"   && this->src[this->position + {i}] == '\\x{ch.encode()[0]:x}' // {escape_string(ch)}\n"
+                for b_i, b in enumerate(ch.encode()[1:], 1):
+                    str_condition += f"   && this->src[this->position + {b_i + i}] == '\\x{b:x}'\n"
+                i += len(ch.encode())
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
