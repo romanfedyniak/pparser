@@ -37,7 +37,7 @@ RT = typing.TypeVar('RT')  # return type
 
 class TokenType(enum.Enum):
     COMMENT = re.compile(r"#.*(?=\n)?")
-    IDENTIFIER = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+    IDENTIFIER = re.compile(r"[^\d\W]\w*")
     EQUAL = re.compile(r"=")
     PIPE = re.compile(r"\|")
     AMPERSAND = re.compile(r"&")
