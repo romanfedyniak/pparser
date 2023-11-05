@@ -244,12 +244,12 @@ The parser is defined in the `PParser` namespace and is named `Parser`.
 ```cpp
 Parser::Parser(std::string_view src);
 ```
-Constructor. Accepts a sequence of characters to be parsed
+Constructor. Accepts a sequence of characters to be parsed.
 
 ```cpp
 Parser::Result Parser::parse();
 ```
-Initiates parsing. The return type depends on the root rule; it can be either `bool` or the type specified in the `%type` directive wrapped in `std::optional`
+Initiates parsing. The return type depends on the root rule; it can be either `bool` or the type specified in the `%type` directive wrapped in `std::optional`.
 
 ## License
 [MIT](LICENSE)
