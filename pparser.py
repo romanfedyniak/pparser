@@ -325,6 +325,7 @@ def escape_string(string: str) -> str:
             new_string += ch
     return new_string
 
+
 class ParsingFail(Exception):
     pass
 
@@ -913,9 +914,9 @@ class CodeGenerator:
         if self.code_from_directive:
             write_lines(
                 self.cpp_file,
-                "// code from %code",
+                "// code from %cpp",
                 remove_indent(self.code_from_directive),
-                "// end %code",
+                "// end %cpp",
                 "",
             )
 
@@ -923,6 +924,12 @@ class CodeGenerator:
             self.cpp_file,
             "namespace PParser",
             "{",
+            "",
+            "    struct ParsingFail",
+            "    {",
+            "        std::string message;",
+            "        size_t position;",
+            "    };",
             "",
             "    ////////// BEGINNING OF RULES //////////",
             "",
@@ -937,6 +944,7 @@ class CodeGenerator:
             "#include <string>",
             "#include <string_view>",
             "#include <optional>",
+            "#include <functional>",
             "",
         )
 
@@ -956,18 +964,11 @@ class CodeGenerator:
             "",
             f"    using ExprResult = {self.rule_type};",
             "",
-            "    struct Token",
-            "    {",
-            "        std::string value;",
-            "        size_t firstLine;",
-            "        size_t firstColumn;",
-            "        size_t lastLine;",
-            "        size_t lastColumn;",
-            "    };",
-            "",
             "    class Parser",
             "    {",
             "    private:",
+            "        using errorHandler_t = std::function<void(std::string message, size_t position)>;",
+            "        errorHandler_t errorHandler;",
             "        const std::string_view src;",
             "        size_t position = 0;",
             "",
@@ -1028,10 +1029,25 @@ class CodeGenerator:
             "        return n;",
             "    }",
             "",
-            "    Parser::Result Parser::parse()",
+            "    void Parser::parseError(const std::string& msg) const",
+            "    {",
+            "        throw ParsingFail{msg, this->position};",
+            "    }",
+            "",
+            "    void Parser::setErrorHandler(errorHandler_t handler)",
+            "    {",
+            "        errorHandler = handler;",
+            "    }",
+            "",
+            "    Parser::Result Parser::parse() noexcept",
             "    {",
             "        this->position = 0;",
-            f"        return rule__{self.root_rule}();",
+            "        try {",
+            f"            return rule__{self.root_rule}();",
+            "        } catch (const ParsingFail& error) {",
+            "            if (errorHandler) errorHandler(error.message, error.position);",
+            f"            return {'std::nullopt' if self.rules_return_type[self.root_rule].is_optional else 'false'};",
+            "        }",
             "    }",
             "",
             "    Parser::Parser(std::string_view src) : src(src) {}",
@@ -1043,14 +1059,16 @@ class CodeGenerator:
             self.hpp_file,
             "        ////////// END OF RULES //////////",
             "",
-            "        size_t getUtf8Size() const;"
-            "        size_t getUtf32Char(char32_t& c32) const;"
+            "        size_t getUtf8Size() const;",
+            "        size_t getUtf32Char(char32_t& c32) const;",
+            "        void parseError(const std::string& msg) const;",
             "",
             "    public:",
-            "        explicit Parser(std::string_view src);",
-            "",
+            "        void setErrorHandler(errorHandler_t handler);",
             f"        using Result = {self.rules_return_type[self.root_rule]};",
-            "        Result parse();",
+            "        Result parse() noexcept;",
+            "",
+            "        explicit Parser(std::string_view src);",
             "    };",
             "}",
             "",

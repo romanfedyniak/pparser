@@ -252,7 +252,17 @@ Constructor. Accepts a sequence of characters to be parsed.
 ```cpp
 Parser::Result Parser::parse();
 ```
-Initiates parsing. The return type of the method is the same as in the root rule, wrapped in std::optional, in case the return type is not bool.
+Initiates parsing. The return type of the method is the same as in the root rule, wrapped in `std::optional`, in case the return type is not `bool`.
 
+```cpp
+void Parser::parseError(const std::string& msg);
+```
+This is private method; it can be called withins actions if you want to terminate parsing, calls an error handler if one was set.
+
+```cpp
+using errorHandler_t = std::function<void(std::string message, size_t position)>;
+void Parser::setErrorHandler(errorHandler_t handler);
+```
+Sets a handler for errors triggered through parseError.
 ## License
 [MIT](LICENSE)
