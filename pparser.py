@@ -173,9 +173,17 @@ class Tokenizer:
         sys.exit(1)
 
 
-class Node():
-    pass
+TNode = typing.TypeVar("TNode", bound="Node")
 
+@dataclass(kw_only=True)
+class Node():
+    line: int = 0
+    col: int = 0
+
+    def set_pos(self: TNode, start_token: Token) -> TNode:
+        self.line = start_token.line
+        self.col = start_token.col
+        return self
 
 @dataclass
 class BlockStatementNode(Node):
@@ -218,7 +226,7 @@ class ParsingExpressionContext:
 
 
 @dataclass(kw_only=True)
-class ParsingExpressionNode:
+class ParsingExpressionNode(Node):
     ctx: ParsingExpressionContext = field(default_factory=ParsingExpressionContext)
 
 
@@ -234,7 +242,7 @@ class ParsingExpressionStringNode(ParsingExpressionNode):
 
 @dataclass
 class ParsingExpressionGroupNode(ParsingExpressionNode):
-    parsing_expression: list["ParsingExpressionsNode"]
+    parsing_expression: list["ParsingExpressionSequence"]
 
 
 @dataclass
@@ -248,7 +256,7 @@ class ParsingExpressionDotNode(ParsingExpressionNode):
 
 
 @dataclass
-class ParsingExpressionsNode(Node):
+class ParsingExpressionSequence(Node):
     items: list[ParsingExpressionNode]
     action: str | None
 
@@ -256,7 +264,7 @@ class ParsingExpressionsNode(Node):
 @dataclass
 class RuleNode(Node):
     name: str
-    parsing_expression: list[ParsingExpressionsNode]
+    parsing_expression: list[ParsingExpressionSequence]
     return_type: str | None = None
 
 
@@ -377,36 +385,40 @@ class Parser:
     def name_statement(self):
         with self.manager:
             self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "name":
-                return NameNode(self.match(TokenType.IDENTIFIER))
+            if self.match(TokenType.IDENTIFIER).value == "name":
+                id = self.match(TokenType.IDENTIFIER)
+                return NameNode(id.value).set_pos(id)
         raise ParsingFail
 
     def header_statement(self):
         with self.manager:
-            self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "hpp":
-                return HeaderBlockNode(self.match(TokenType.CODE_SECTION))
+            percent = self.match(TokenType.PERCENT)
+            if self.match(TokenType.IDENTIFIER).value == "hpp":
+                return HeaderBlockNode(self.match(TokenType.CODE_SECTION).value).set_pos(percent)
         raise ParsingFail
 
     def code_statement(self):
         with self.manager:
             self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "cpp":
-                return CodeBlockNode(self.match(TokenType.CODE_SECTION))
+            if self.match(TokenType.IDENTIFIER).value == "cpp":
+                code = self.match(TokenType.CODE_SECTION)
+                return CodeBlockNode(code.value).set_pos(code)
         raise ParsingFail
 
     def rule_type_statement(self):
         with self.manager:
             self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "type":
-                return RuleTypeNode(self.match(TokenType.STRING)[1:-1])
+            if self.match(TokenType.IDENTIFIER).value == "type":
+                string = self.match(TokenType.STRING)
+                return RuleTypeNode(string.value[1:-1]).set_pos(string)
         raise ParsingFail
 
     def root_rule_statement(self):
         with self.manager:
             self.match(TokenType.PERCENT)
-            if self.match(TokenType.IDENTIFIER) == "root":
-                return RootRuleNode(self.match(TokenType.IDENTIFIER))
+            if self.match(TokenType.IDENTIFIER).value == "root":
+                id = self.match(TokenType.IDENTIFIER)
+                return RootRuleNode(id.value).set_pos(id)
         raise ParsingFail
 
     def parsing_expression_atom(self):
@@ -414,22 +426,24 @@ class Parser:
             id = self.match(TokenType.IDENTIFIER)
             self.lookahead(False, TokenType.EQUAL)
             self.lookahead(False, TokenType.RULE_TYPE)
-            return ParsingExpressionRuleNameNode(id)
+            return ParsingExpressionRuleNameNode(id.value).set_pos(id)
         with self.manager:
-            string = unescape_string(self.match(TokenType.STRING)[1:-1], STRING_UNESCAPE_TABLE)
-            return ParsingExpressionStringNode(string)
+            str_token = self.match(TokenType.STRING)
+            string = unescape_string(str_token.value[1:-1], STRING_UNESCAPE_TABLE)
+            return ParsingExpressionStringNode(string).set_pos(str_token)
         with self.manager:
-            self.match(TokenType.LPAR)
+            lpar = self.match(TokenType.LPAR)
             parsing_expressions = self.loop(True, self.parsing_expression_)
-            group = ParsingExpressionGroupNode([ParsingExpressionsNode(i, None) for i in parsing_expressions])
+            group = ParsingExpressionGroupNode([ParsingExpressionSequence(i, None).set_pos(lpar) for i in parsing_expressions]).set_pos(lpar)
             self.match(TokenType.RPAR)
             return group
         with self.manager:
-            string = unescape_string(self.match(TokenType.CHARACTER_CLASS)[1:-1], CHARACTER_CLASS_UNESCAPE_TABLE)
-            return ParsingExpressionCharacterClassNode(string)
+            char_class = self.match(TokenType.CHARACTER_CLASS)
+            string = unescape_string(char_class.value[1:-1], CHARACTER_CLASS_UNESCAPE_TABLE)
+            return ParsingExpressionCharacterClassNode(string).set_pos(char_class)
         with self.manager:
-            self.match(TokenType.DOT)
-            return ParsingExpressionDotNode()
+            dot = self.match(TokenType.DOT)
+            return ParsingExpressionDotNode().set_pos(dot)
         raise ParsingFail
 
     def parsing_expression_item(self):
@@ -471,7 +485,7 @@ class Parser:
             id = self.match(TokenType.IDENTIFIER)
             self.match(TokenType.COLON)
             item = self.parsing_expression_item()
-            item.ctx.name = id
+            item.ctx.name = id.value
             return item
         with self.manager:
             return self.parsing_expression_item()
@@ -489,7 +503,10 @@ class Parser:
         with self.manager:
             parsing_expression = self.parsing_expression_()
             action = self.optional(TokenType.ACTION)
-            return ParsingExpressionsNode(parsing_expression, action)
+            node = ParsingExpressionSequence(parsing_expression, action.value if action else None)
+            node.line = parsing_expression[0].line
+            node.col = parsing_expression[0].col
+            return node
         raise ParsingFail
 
     def rule_statement(self):
@@ -498,9 +515,9 @@ class Parser:
             rule_type = self.optional(TokenType.RULE_TYPE)
             self.match(TokenType.EQUAL)
             parsing_expressions = self.loop(True, self.parsing_expression)
-            rule_node = RuleNode(rule_name, parsing_expressions)
+            rule_node = RuleNode(rule_name.value, parsing_expressions).set_pos(rule_name)
             if rule_type:
-                rule_node.return_type = rule_type[1:-1].strip()
+                rule_node.return_type = rule_type.value[1:-1].strip()
             return rule_node
         raise ParsingFail
 
@@ -520,18 +537,18 @@ class Parser:
             return token
         return None
 
-    def match(self, token_type: TokenType) -> str:
+    def match(self, token_type: TokenType) -> Token:
         token = self.get_token()
         if token and token.type == token_type:
             self.pos += 1
-            return token.value
+            return token
         raise ParsingFail
 
-    def optional(self, token_type: TokenType) -> str | None:
+    def optional(self, token_type: TokenType) -> Token | None:
         token = self.get_token()
         if token and token.type == token_type:
             self.pos += 1
-            return token.value
+            return token
         return None
 
     def loop(self, nonempty, func: typing.Callable[..., RT], *args) -> list[RT]:
@@ -597,7 +614,7 @@ def set_indent(string: str, indent: int) -> str:
     return add_indent(remove_indent(string), indent)
 
 
-def get_return_type_of_parsing_expression_sequence(parsing_expression: ParsingExpressionsNode) -> "CppType":
+def get_return_type_of_parsing_expression_sequence(parsing_expression: ParsingExpressionSequence) -> "CppType":
     if parsing_expression.action is None or "$$" not in parsing_expression.action:
         return CppType("bool")
     else:
@@ -668,7 +685,7 @@ class StaticAnalyzer:
     def check_rule_name_in_root_directive(self):
         if root_rule_node := self.get_node_or_none(RootRuleNode):
             if root_rule_node.name not in self.get_rule_names():
-                self.error(f"The directive '%root' contains a non-existing rule: '{root_rule_node.name}'")
+                self.error(f"The directive '%root' contains a non-existing rule: '{root_rule_node.name}'", root_rule_node)
 
     def check_action_presence(self):
         for statement in self.root_node.statements:
@@ -685,12 +702,14 @@ class StaticAnalyzer:
                             is_var_presence = True
                             break
                     if is_var_presence and parsing_expression_sequence.action is None:
-                        self.error(f"In the '{rule.name}' rule, variables are declared, but there is no action")
+                        self.error(f"In the '{rule.name}' rule, variables are declared, but there is no action", parsing_expression_sequence)
                     if is_rule_type_specified:
                         if parsing_expression_sequence.action is None:
-                            self.error(f"In the '{rule.name}' rule, the return type is defined, but the action not specified")
+                            self.error(f"In the '{rule.name}' rule, the return type is defined, but the action not specified",
+                                       parsing_expression_sequence)
                         elif "$$" not in parsing_expression_sequence.action:
-                            self.error(f"In the '{rule.name}' rule, the return type is defined, but '$$' variable in the action is not")
+                            self.error(f"In the '{rule.name}' rule, the return type is defined, but '$$' variable in the action is not",
+                                       parsing_expression_sequence)
 
     def same_var_names_in_parsing_expr_sequence(self):
         error_message = "In the '{}' rule, variable '{}' is declared multiple times"
@@ -702,11 +721,11 @@ class StaticAnalyzer:
                         if isinstance(group := item, ParsingExpressionGroupNode):
                             for var in self.get_vars_from_group(group):
                                 if var in var_names:
-                                    self.error(error_message.format(rule.name, var))
+                                    self.error(error_message.format(rule.name, var), parsing_expression_sequence)
                                 var_names.append(var)
                         if (var := item.ctx.name):
                             if var in var_names:
-                                self.error(error_message.format(rule.name, var))
+                                self.error(error_message.format(rule.name, var), parsing_expression_sequence)
                             var_names.append(var)
 
     def group_with_repetition_has_variables_inside(self):
@@ -717,7 +736,7 @@ class StaticAnalyzer:
                         if isinstance(group := item, ParsingExpressionGroupNode):
                             if group.ctx.loop and len(self.get_vars_from_group(group)):
                                 self.error(f"In the '{rule.name}' rule, the group uses variables inside itself"
-                                           " and repetitions operators simultaneously")
+                                           " and repetitions operators simultaneously", group)
 
     def lookahead_false_assigned_to_var(self):
         for statement in self.root_node.statements:
@@ -726,7 +745,7 @@ class StaticAnalyzer:
                     for item in parsing_expression_sequence.items:
                         if item.ctx.lookahead and not item.ctx.lookahead_positive and item.ctx.name:
                             self.error(f"In the '{rule.name}' rule, a parsing expression with the '!' operator"
-                                       " cannot be assigned to a variable")
+                                       " cannot be assigned to a variable", item)
 
     def string_assigned_to_var(self):
         for statement in self.root_node.statements:
@@ -737,9 +756,9 @@ class StaticAnalyzer:
                             if string.ctx.name:
                                 if string.ctx.lookahead:
                                     self.error(f"In the '{rule.name}' rule, a string with the '&' operator"
-                                                " cannot be assigned to a variable")
+                                                " cannot be assigned to a variable", string)
                                 if not string.ctx.loop and not string.ctx.optional:
-                                    self.error(f"In the '{rule.name}' rule, simple string cannot be assigned to a variable")
+                                    self.error(f"In the '{rule.name}' rule, simple string cannot be assigned to a variable", string)
 
     def check_return_types_in_parsing_expression_sequences(self):
         for statement in self.root_node.statements:
@@ -748,7 +767,7 @@ class StaticAnalyzer:
                     return_type = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
                     for parsing_expression_sequence in rule.parsing_expression[1:]:
                         if return_type != get_return_type_of_parsing_expression_sequence(parsing_expression_sequence):
-                            self.error(f"In the '{rule.name}' rule, parsing expression sequences return different types")
+                            self.error(f"In the '{rule.name}' rule, parsing expression sequences return different types", rule)
 
     def check_characters_inside_character_class(self):
         for statement in self.root_node.statements:
@@ -766,19 +785,22 @@ class StaticAnalyzer:
                                     to = character_class.characters[i + 2]
                                     error_message = (
                                             f"In the '{rule.name}' rule, inside the character class"
-                                            f" '[{repr(character_class.characters)[1:-1]}]',"
+                                            f" '[{escape_string(character_class.characters)}]',"
                                             " {}"
-                                            f" '{repr(from_)[1:-1]}-{repr(to)[1:-1]}'"
+                                            f" '{escape_string(from_)}-{escape_string(to)}'"
                                     )
                                     if from_ == to:
-                                        self.error(error_message.format("the first and second characters in the range are the same"))
+                                        self.error(error_message.format("the first and second characters in the range are the same"),
+                                                   character_class)
                                     elif ord(from_) > ord(to):
-                                        self.error(error_message.format("the first character is 'greater' than the second in a range"))
+                                        self.error(error_message.format("the first character is 'greater' than the second in a range"),
+                                                   character_class)
                                     i += 2
                                     ranges.append((from_, to))
                                 else:
                                     if ch in characters:
-                                        self.error(f"In the '{rule.name}' rule, the character class has the same characters: {repr(ch)}")
+                                        self.error(f"In the '{rule.name}' rule, the character class has the same characters: {escape_string(ch)}",
+                                                   character_class)
                                     characters.append(ch)
                                 i += 1
 
@@ -787,9 +809,10 @@ class StaticAnalyzer:
                                     if ord(ch) >= ord(from_) and ord(ch) <= ord(to):
                                         self.error(
                                             f"In the '{rule.name}' rule, inside the character class"
-                                            f" '[{repr(character_class.characters)[1:-1]}]',"
-                                            f" the character '{repr(ch)[1:-1]}' intersects with the range"
-                                            f" '{repr(from_)[1:-1]}-{repr(to)[1:-1]}'"
+                                            f" '[{escape_string(character_class.characters)}]',"
+                                            f" the character '{escape_string(ch)}' intersects with the range"
+                                            f" '{escape_string(from_)}-{escape_string(to)}'",
+                                            character_class
                                         )
 
     def get_rule_names(self) -> list[str]:
@@ -818,7 +841,9 @@ class StaticAnalyzer:
                     vars.append(var)
         return vars
 
-    def error(self, message: str) -> typing.NoReturn:
+    def error(self, message: str, node: Node | None = None) -> typing.NoReturn:
+        if node:
+            print(f"{self.filename}:{node.line}:{node.col}: ", end='', file=sys.stderr)
         print(message, file=sys.stderr)
         sys.exit(1)
 
@@ -1082,7 +1107,7 @@ class CodeGenerator:
         write_lines(self.cpp_file, "    }", "")
 
     def gen_parsing_expr(
-            self, node: ParsingExpressionsNode, next: str, return_type: CppType, rule_name: str, expr_index: int):
+            self, node: ParsingExpressionSequence, next: str, return_type: CppType, rule_name: str, expr_index: int):
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
@@ -1360,7 +1385,7 @@ class CodeGenerator:
         return GeneratedExpression(code, var)
 
     def gen_parsing_expr_inside_group(
-            self, node: ParsingExpressionsNode, next: str, expr_index: int, prefix: str,) -> tuple[str, list[str]]:
+            self, node: ParsingExpressionSequence, next: str, expr_index: int, prefix: str,) -> tuple[str, list[str]]:
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
