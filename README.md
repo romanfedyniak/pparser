@@ -5,7 +5,7 @@ pparser is [peg](https://en.wikipedia.org/wiki/Parsing_expression_grammar) parse
 ## Features
 - [x] generation of a parser in C++ code
 - [x] support for unicode
-- [ ] support for various return types for rules
+- [x] support for various return types for rules
 - [ ] support for left-recursive rules
 - [ ] support for the Packrat parsing algorithm
 
@@ -98,7 +98,7 @@ Statement = Value # starts from here
 ### Rules
 Syntax:
 ```
-<RuleName> = <parsing expression sequence> { <c++ code> }
+<RuleName> <return type> = <parsing expression sequence> { <c++ code> }
 ```
 - RuleName - this is the name of a rule, and it can consist of letters, digits, and underscores, but it cannot start with a digit. Names are case-sensitive.
 
@@ -237,7 +237,10 @@ Rule =
     | "2"
     | n:"3" { $$=std::stoi(n) }
 ```
-If no action is defined with the variable '`$$`', the return type is `bool`. If variable '`$$`' is not defined, the return type is determined by the `%type` directive, or if the directive is not defined, it defaults to `size_t`.
+If no action is defined with the variable '`$$`', the return type is `bool`. If variable '`$$`' is not defined, the return type is determined by the `%type` directive, or if the directive is not defined, it defaults to `size_t`. Also, the return type can be set manually.
+```
+Rule<Node*> [0-9]+ { $$ = new Node{}; }
+```
 
 ## C++ API
 The parser is defined in the `PParser` namespace and is named `Parser`.
@@ -249,7 +252,7 @@ Constructor. Accepts a sequence of characters to be parsed.
 ```cpp
 Parser::Result Parser::parse();
 ```
-Initiates parsing. The return type depends on the root rule; it can be either `bool` or the type specified in the `%type` directive wrapped in `std::optional`.
+Initiates parsing. The return type of the method is the same as in the root rule, wrapped in std::optional, in case the return type is not bool.
 
 ## License
 [MIT](LICENSE)

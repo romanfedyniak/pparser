@@ -57,6 +57,7 @@ class TokenType(enum.Enum):
     # special tokens
     CODE_SECTION = enum.auto()
     ACTION = enum.auto()
+    RULE_TYPE = enum.auto()
 
     def __repr__(self):
         cls_name = self.__class__.__name__
@@ -85,82 +86,63 @@ class Tokenizer:
         while self.pos < len(self.src):
             if self.src[self.pos].isspace():
                 self.pos += 1
-                continue
-
             # special token processing
             elif len(self.tokens) >= 2 and \
                     self.tokens[-2].type == TokenType.PERCENT and self.tokens[-1].type == TokenType.IDENTIFIER and \
                     ((name := self.tokens[-1].value) == "cpp" or name == "hpp"):
-                start_pos = self.pos
-
                 while self.src[self.pos].isspace():
                     self.pos += 1
 
-                open_brackets = 0
                 if self.peek() == "{":
-                    self.pos += 1
-                    code_start = self.pos
-                    open_brackets += 1
-                    while self.pos < len(self.src):
-                        if self.peek() == "{":
-                            open_brackets += 1
-                        elif self.peek() == "}":
-                            open_brackets -= 1
-                        self.pos += 1
-                        if open_brackets == 0:
-                            action_end = self.pos - 1
-                            value = self.src[code_start:action_end]
-                            line_number = self.calc_line(start_pos)
-                            col = self.calc_column(start_pos, line_number)
-                            self.tokens.append(Token(
-                                TokenType.CODE_SECTION,
-                                value,
-                                line_number,
-                                col))
-                            break
-                    else:
-                        self.error("'}' is expected")
+                    action_start, action_end = self.match_paired_characters("{", "}")
+                    self.pos = action_end + 1
+                    value = self.src[action_start + 1:action_end]
+                    line_number = self.calc_line(action_start)
+                    col = self.calc_column(action_start, line_number)
+                    self.tokens.append(Token(TokenType.CODE_SECTION, value, line_number, col))
                 else:
                     self.error("'{' is expected")
-                continue
-            elif self.src[self.pos] == "{":
-                open_brackets = 0
-                self.pos += 1
-                action_start = self.pos
-                open_brackets += 1
-                while self.pos < len(self.src):
-                    if self.peek() == "{":
-                        open_brackets += 1
-                    elif self.peek() == "}":
-                        open_brackets -= 1
-                    self.pos += 1
-                    if open_brackets == 0:
-                        action_end = self.pos - 1
-                        value = self.src[action_start:action_end]
-                        line_number = self.calc_line(action_start)
-                        col = self.calc_column(action_start, line_number)
-                        self.tokens.append(Token(
-                            TokenType.ACTION,
-                            value,
-                            line_number,
-                            col))
+            elif self.peek() == "{":
+                action_start, action_end = self.match_paired_characters("{", "}")
+                self.pos = action_end + 1
+                value = self.src[action_start:action_end + 1]
+                line_number = self.calc_line(action_start)
+                col = self.calc_column(action_start, line_number)
+                self.tokens.append(Token(TokenType.ACTION, value, line_number, col))
+            elif self.peek() == "<":
+                type_start, type_end = self.match_paired_characters("<", ">")
+                self.pos = type_end + 1
+                value = self.src[type_start:type_end + 1]
+                line_number = self.calc_line(type_start)
+                col = self.calc_column(type_start, line_number)
+                self.tokens.append(Token(TokenType.RULE_TYPE, value, line_number, col))
+            else:
+                for token_type in TokenType:
+                    # skip special tokens
+                    if token_type in (TokenType.CODE_SECTION, TokenType.ACTION, TokenType.RULE_TYPE):
+                        continue
+                    if result := token_type.value.match(self.src, self.pos):
+                        self.pos = result.end()
+                        self.add_token(token_type, result.group())
                         break
                 else:
-                    self.error("'}' is expected")
-                continue
-
-            for token_type in TokenType:
-                # skip special tokens
-                if token_type in (TokenType.CODE_SECTION, TokenType.ACTION):
-                    continue
-                if result := token_type.value.match(self.src, self.pos):
-                    self.pos = result.end()
-                    self.add_token(token_type, result.group())
-                    break
-            else:
-                self.error(f"unknown character '{self.src[self.pos]}'")
+                    self.error(f"unknown character '{self.src[self.pos]}'")
 
         return self.tokens
+
+    def match_paired_characters(self, open_char: str, close_char: str) -> tuple[int, int]:
+        mark = self.pos
+        open = 1
+        self.pos += 1
+        while self.pos < len(self.src):
+            if self.peek() == open_char: open += 1
+            elif self.peek() == close_char: open -= 1
+            if open == 0:
+                end_pos = self.pos
+                self.pos = mark
+                return mark, end_pos
+            self.pos += 1
+        self.error(f"'{close_char}' is expected")
 
     def peek(self):
         if self.pos >= len(self.src):
@@ -183,7 +165,7 @@ class Tokenizer:
         col = self.calc_column(position, line)
         self.tokens.append(Token(token_type, value, line, col))
 
-    def error(self, message):
+    def error(self, message) -> typing.NoReturn:
         line_number = self.src.count("\n", 0, self.pos)
         lines = self.src.splitlines(keepends=True)
         col = self.pos + 1 if line_number == 0 else self.pos - sum(map(len, lines[:line_number])) + 1
@@ -275,6 +257,7 @@ class ParsingExpressionsNode(Node):
 class RuleNode(Node):
     name: str
     parsing_expression: list[ParsingExpressionsNode]
+    return_type: str | None = None
 
 
 STRING_UNESCAPE_TABLE = {
@@ -430,6 +413,7 @@ class Parser:
         with self.manager:
             id = self.match(TokenType.IDENTIFIER)
             self.lookahead(False, TokenType.EQUAL)
+            self.lookahead(False, TokenType.RULE_TYPE)
             return ParsingExpressionRuleNameNode(id)
         with self.manager:
             string = unescape_string(self.match(TokenType.STRING)[1:-1], STRING_UNESCAPE_TABLE)
@@ -511,9 +495,13 @@ class Parser:
     def rule_statement(self):
         with self.manager:
             rule_name = self.match(TokenType.IDENTIFIER)
+            rule_type = self.optional(TokenType.RULE_TYPE)
             self.match(TokenType.EQUAL)
             parsing_expressions = self.loop(True, self.parsing_expression)
-            return RuleNode(rule_name, parsing_expressions)
+            rule_node = RuleNode(rule_name, parsing_expressions)
+            if rule_type:
+                rule_node.return_type = rule_type[1:-1].strip()
+            return rule_node
         raise ParsingFail
 
     @property
@@ -685,6 +673,7 @@ class StaticAnalyzer:
     def check_action_presence(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
+                is_rule_type_specified = bool(rule.return_type)
                 for parsing_expression_sequence in rule.parsing_expression:
                     is_var_presence = False
                     for item in parsing_expression_sequence.items:
@@ -696,7 +685,12 @@ class StaticAnalyzer:
                             is_var_presence = True
                             break
                     if is_var_presence and parsing_expression_sequence.action is None:
-                        self.error(f"In the '{rule.name}' rule variables are declared, but there is no action")
+                        self.error(f"In the '{rule.name}' rule, variables are declared, but there is no action")
+                    if is_rule_type_specified:
+                        if parsing_expression_sequence.action is None:
+                            self.error(f"In the '{rule.name}' rule, the return type is defined, but the action not specified")
+                        elif "$$" not in parsing_expression_sequence.action:
+                            self.error(f"In the '{rule.name}' rule, the return type is defined, but '$$' variable in the action is not")
 
     def same_var_names_in_parsing_expr_sequence(self):
         error_message = "In the '{}' rule, variable '{}' is declared multiple times"
@@ -754,7 +748,7 @@ class StaticAnalyzer:
                     return_type = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
                     for parsing_expression_sequence in rule.parsing_expression[1:]:
                         if return_type != get_return_type_of_parsing_expression_sequence(parsing_expression_sequence):
-                            self.error(f"In the '{rule.name}', parsing expression sequences return different types")
+                            self.error(f"In the '{rule.name}' rule, parsing expression sequences return different types")
 
     def check_characters_inside_character_class(self):
         for statement in self.root_node.statements:
@@ -869,9 +863,12 @@ class CodeGenerator:
 
     def type_analysis(self):
         for node in self.root_node.statements:
-            if not isinstance(node, RuleNode):
+            if not isinstance(rule := node, RuleNode):
                 continue
-            self.rules_return_type[node.name] = get_return_type_of_parsing_expression_sequence(node.parsing_expression[0])
+            if rule.return_type:
+                self.rules_return_type[rule.name] = CppType(rule.return_type, True)
+            else:
+                self.rules_return_type[rule.name] = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
