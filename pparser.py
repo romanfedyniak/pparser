@@ -959,6 +959,53 @@ class CodeGenerator:
             self.cpp_file,
             "    ////////// END OF RULES //////////",
             "",
+            "    size_t Parser::getUtf8Size() const",
+            "    {",
+            "        if (position >= src.size()) return 0;",
+            "        auto uc = (unsigned char)src[position];",
+            "        if (uc < 128) return 1;",
+            "        else if ((uc & 0xE0) == 0xC0) return 2;",
+            "        else if ((uc & 0xF0) == 0xE0) return 3;",
+            "        else if ((uc & 0xF8) == 0xF0) return 4;",
+            "        else return 0;",
+            "    }",
+            "",
+            "    size_t Parser::getUtf32Char(char32_t& c32) const",
+            "    {",
+            "        size_t n = getUtf8Size();",
+            "        if (n == 0) return 0;",
+            "        if (position + n > src.size()) return 0;",
+            "",
+            "        switch(n) {",
+            "        case 1:",
+            "            c32 = src[position];",
+            "            break;",
+            "        case 2:",
+            "            if ((src[position + 1] & 0xC0) != 0x80) return 0;",
+            "            c32 = ((src[position + 0] & 0x1F) << 6) |",
+            "                  ((src[position + 1] & 0x3F));",
+            "            break;",
+            "        case 3:",
+            "            if ((src[position + 1] & 0xC0) != 0x80) return 0;",
+            "            if ((src[position + 2] & 0xC0) != 0x80) return 0;",
+            "            c32 = ((src[position + 0] & 0xF) << 12) |",
+            "                  ((src[position + 1] & 0x3F) << 6) |",
+            "                  ((src[position + 2] & 0x3F));",
+            "            break;",
+            "        case 4:",
+            "            if ((src[position + 1] & 0xC0) != 0x80) return 0;",
+            "            if ((src[position + 2] & 0xC0) != 0x80) return 0;",
+            "            if ((src[position + 3] & 0xC0) != 0x80) return 0;",
+            "            c32 = ((src[position + 0] & 0x7) << 18)  |",
+            "                  ((src[position + 1] & 0x3F) << 12) |",
+            "                  ((src[position + 2] & 0x3F) << 6)  |",
+            "                  ((src[position + 3] & 0x3F));",
+            "            break;",
+            "        }",
+            "",
+            "        return n;",
+            "    }",
+            "",
             "    Parser::Result Parser::parse()",
             "    {",
             "        this->position = 0;",
@@ -973,6 +1020,9 @@ class CodeGenerator:
         write_lines(
             self.hpp_file,
             "        ////////// END OF RULES //////////",
+            "",
+            "        size_t getUtf8Size() const;"
+            "        size_t getUtf32Char(char32_t& c32) const;"
             "",
             "    public:",
             "        explicit Parser(std::string_view src);",
@@ -1220,19 +1270,16 @@ class CodeGenerator:
         return GeneratedExpression(code, var)
 
     def generate_character_class_condition(self, characters: str) -> str:
-        for ch in characters:
-            assert not (ord(ch) > 256), "Unicode not supported in character classes"
-
         condition = ""
         i = 0
         while i < len(characters):
             ch = characters[i]
             if i + 2 < len(characters) and characters[i + 1] == "-":
-                condition += f"    || this->src[this->position] >= {ord(ch)}"
-                condition += f" && this->src[this->position] <= {ord(characters[i + 2])} // {repr(ch)}, {repr(characters[i + 2])}\n"
+                condition += f"    || __ch >= 0x{ord(ch):06x}"
+                condition += f" && __ch <= 0x{ord(characters[i + 2]):06x} // {escape_string(ch)}, {escape_string(characters[i + 2])}\n"
                 i += 2
             else:
-                condition += f"    || this->src[this->position] == {ord(ch)} // {repr(ch)}\n"
+                condition += f"    || __ch == 0x{ord(ch):06x} // {escape_string(ch)}\n"
             i += 1
         return condition
 
@@ -1243,48 +1290,57 @@ class CodeGenerator:
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:
-                code += f"if (this->position >= this->size()) goto {next};\n"
-                code += "if (!(false\n"
-                code += condition
-                code += f")) goto {next};\n"
-            else:
-                code += "if (this->position < this->src.size())\n"
                 code += "{\n"
-                code += "    if(!(false\n"
+                code += "    size_t __n;\n"
+                code += "    char32_t __ch;\n"
+                code += f"    if (!(__n = getUtf32Char(__ch))) goto {next};\n"
+                code += "    if (!(false\n"
+                code += add_indent(condition, 4)
+                code += f"    )) goto {next};\n"
+                if node.ctx.name:
+                    var = f"std::string {node.ctx.name};"
+                    code += f"    {node.ctx.name} = this->src.substr(this->position, __n);\n"
+                code += "}\n"
+            else:
+                code += "if (char32_t __ch; getUtf32Char(__ch))\n"
+                code += "{\n"
+                code += "    if((false\n"
                 code += add_indent(condition, 4)
                 code += f"    )) goto {next};\n"
                 code += "}\n"
                 code += f"else goto {next};\n"
-            if node.ctx.name:
-                var = f"std::string {node.ctx.name};"
-                code += f"{node.ctx.name} = this->src[this->position];\n"
         elif node.ctx.optional:
-            code += "if (this->position < this->src.size())\n"
             code += "{\n"
-            code += "    if ((false\n"
-            code += add_indent(condition, 4)
-            code += "    ))\n"
+            code += "    char32_t __ch;\n"
+            code += "    if (size_t __n = getUtf32Char(__ch))\n"
             code += "    {\n"
+            code += "        if ((false\n"
+            code += add_indent(condition, 8)
+            code += "        ))\n"
+            code += "        {\n"
             if node.ctx.name:
                 var = f"std::optional<std::string> {node.ctx.name};"
-                code += f"        {node.ctx.name} = this->src[this->position];\n"
-            code += "        this->position++;\n"
+                code += f"            {node.ctx.name} = this->src.substr(this->position, __n);\n"
+            code += "            this->position += __n;\n"
+            code += "        }\n"
             code += "    }\n"
             code += "}\n"
         elif node.ctx.loop:
             code += "{\n"
             if node.ctx.loop_nonempty:
                 code += "    size_t __i = 0;\n"
+            code += "    size_t __n;\n"
+            code += "    char32_t __ch;\n"
             code += "    for(;;)\n"
             code += "    {\n"
-            code += "        if (this->position >= this->src.size()) break;\n"
+            code += "        if (!(__n = getUtf32Char(__ch))) break;\n"
             code += "        if (!(false\n"
             code += add_indent(condition, 8)
             code += "        )) break;\n"
             if node.ctx.name:
                 var = f"std::string {node.ctx.name};"
-                code += f"        {node.ctx.name} += this->src[this->position];\n"
-            code += "        this->position++;\n"
+                code += f"        {node.ctx.name} += this->src.substr(this->position, __n);\n"
+            code += "        this->position += __n;\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
@@ -1292,14 +1348,18 @@ class CodeGenerator:
                 code += f"\n    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += f"if (this->position >= this->src.size()) goto {next};\n"
-            code += "if (!(false\n"
-            code += condition
-            code += f")) goto {next};\n"
+            code += "{\n"
+            code += "    size_t __n;\n"
+            code += "    char32_t __ch;\n"
+            code += f"    if (!(__n = getUtf32Char(__ch))) goto {next};\n"
+            code += "    if (!(false\n"
+            code += add_indent(condition, 4)
+            code += f"    )) goto {next};\n"
             if node.ctx.name:
                 var = f"std::string {node.ctx.name};"
-                code += f"{node.ctx.name} = this->src[this->position];\n"
-            code += "this->position++;\n"
+                code += f"    {node.ctx.name} = this->src.substr(this->position, __n);\n"
+            code += "    this->position += __n;\n"
+            code += "}\n"
         return GeneratedExpression(code, var)
 
     def gen_parsing_expr_inside_group(
@@ -1430,12 +1490,12 @@ class CodeGenerator:
                 code += f"{node.ctx.name} = this->src[this->position];\n"
             code += "this->position++;\n"
         elif node.ctx.optional:
-            code += "if (this->position < this->src.size())\n"
+            code += "if (size_t __n = getUtf8Size())\n"
             code += "{\n"
             if node.ctx.name:
                 var = f"std::optional<std::string> {node.ctx.name};"
-                code += f"    {node.ctx.name} = this->src[this->position];\n"
-            code += "    this->position++;\n"
+                code += f"    {node.ctx.name} = this->src.substr(this->position, __n);\n"
+            code += "    this->position += __n;\n"
             code += "}\n"
         elif node.ctx.loop:
             code += "{\n"
@@ -1443,11 +1503,12 @@ class CodeGenerator:
                 code += "    size_t __i = 0;\n"
             code += "    for (;;)\n"
             code += "    {\n"
-            code += "        if (this->position >= this->src.size()) break;\n"
+            code += "        size_t __n = getUtf8Size();\n"
+            code += "        if (!__n) break;\n"
             if node.ctx.name:
                 var = f"std::string {node.ctx.name};"
-                code += f"        {node.ctx.name} += this->src[this->position];\n"
-            code += "        this->position++;\n"
+                code += f"        {node.ctx.name} += this->src.substr(this->position, __n);\n"
+            code += "        this->position += __n;\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
@@ -1455,11 +1516,14 @@ class CodeGenerator:
                 code += f"    if (!__i) goto {next};\n"
             code += "}\n"
         else:
-            code += f"if (this->position >= this->src.size()) goto {next};\n"
+            code += "{\n"
+            code += "    size_t __n = getUtf8Size();\n"
+            code += f"    if (!__n) goto {next};\n"
             if node.ctx.name:
                 var = f"std::string {node.ctx.name};"
-                code += f"{node.ctx.name} = this->src[this->position];\n"
-            code += "this->position++;\n"
+                code += f"    {node.ctx.name} = this->src.substr(this->position, __n);\n"
+            code += "    this->position += __n;\n"
+            code += "}\n"
         return GeneratedExpression(code, var)
 
 
