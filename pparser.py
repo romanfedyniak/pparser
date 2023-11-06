@@ -921,15 +921,14 @@ class CodeGenerator:
         if self.header_from_directive:
             write_lines(
                 self.hpp_file,
-                "",
                 "// code from %hpp",
                 remove_indent(self.header_from_directive),
                 "// end %hpp",
+                "",
             )
 
         write_lines(
             self.hpp_file,
-            "",
             "namespace PParser",
             "{",
             "",
@@ -996,7 +995,7 @@ class CodeGenerator:
             case RuleNode():
                 if not self.root_rule:
                     self.root_rule = node.name
-                self.gen_Rule(node)
+                self.gen_rule(node)
             case _:
                 self.gen_type_error(node)
 
@@ -1004,7 +1003,7 @@ class CodeGenerator:
         print(f"generator for node with type <{type(node).__name__}> not implemented", file=sys.stderr)
         exit(1)
 
-    def gen_Rule(self, node: RuleNode):
+    def gen_rule(self, node: RuleNode):
         return_type = self.rules_return_type[node.name]
         write_lines(self.hpp_file, f"        {return_type} rule__{node.name}();")
         write_lines(
@@ -1018,7 +1017,7 @@ class CodeGenerator:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
             next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
-            code += self.gen_ParsingExpression(parsing_expression, next, return_type, node.name, i + 1)
+            code += self.gen_parsing_expr(parsing_expression, next, return_type, node.name, i + 1)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
         write_lines(
@@ -1035,23 +1034,23 @@ class CodeGenerator:
             )
         write_lines(self.cpp_file, "    }", "")
 
-    def gen_ParsingExpression(
+    def gen_parsing_expr(
             self, node: ParsingExpressionsNode, next: str, return_type: CppType, rule_name: str, expr_index: int):
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
-                    generated_exprs.append(self.gen_ParsingExpressionRuleName(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_rule_name(i, next))
                 case ParsingExpressionStringNode():
-                    generated_exprs.append(self.gen_ParsingExpressionStringNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_string(i, next))
                 case ParsingExpressionCharacterClassNode():
-                    generated_exprs.append(self.gen_ParsingExpressionCharacterClassNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_character_class(i, next))
                 case ParsingExpressionGroupNode():
-                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"group_{expr_index}_{group_index}"))
+                    generated_exprs.append(self.gen_parsing_expr_group(i, next, f"group_{expr_index}_{group_index}"))
                     group_index += 1
                 case ParsingExpressionDotNode():
-                    generated_exprs.append(self.gen_ParsingExpressionDotNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_dot(i, next))
                 case _:
                     self.gen_type_error(node)
 
@@ -1093,7 +1092,7 @@ class CodeGenerator:
         code += "}\n"
         return code
 
-    def gen_ParsingExpressionRuleName(self, node: ParsingExpressionRuleNameNode, next: str) -> GeneratedExpression:
+    def gen_parsing_expr_rule_name(self, node: ParsingExpressionRuleNameNode, next: str) -> GeneratedExpression:
         code = ""
         var = None
         return_type = self.rules_return_type[node.name]
@@ -1148,7 +1147,7 @@ class CodeGenerator:
             code += "}\n"
         return GeneratedExpression(code, var)
 
-    def gen_ParsingExpressionStringNode(self, node: ParsingExpressionStringNode, next: str) -> GeneratedExpression:
+    def gen_parsing_expr_string(self, node: ParsingExpressionStringNode, next: str) -> GeneratedExpression:
         var = None
         code = ""
         str_bytes = node.value.encode()
@@ -1237,7 +1236,7 @@ class CodeGenerator:
             i += 1
         return condition
 
-    def gen_ParsingExpressionCharacterClassNode(self, node: ParsingExpressionCharacterClassNode, next: str) -> GeneratedExpression:
+    def gen_parsing_expr_character_class(self, node: ParsingExpressionCharacterClassNode, next: str) -> GeneratedExpression:
         var = ""
         code = ""
         condition = self.generate_character_class_condition(node.characters)
@@ -1303,23 +1302,23 @@ class CodeGenerator:
             code += "this->position++;\n"
         return GeneratedExpression(code, var)
 
-    def gen_ParsingExpression_inside_group(
+    def gen_parsing_expr_inside_group(
             self, node: ParsingExpressionsNode, next: str, expr_index: int, prefix: str,) -> tuple[str, list[str]]:
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
-                    generated_exprs.append(self.gen_ParsingExpressionRuleName(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_rule_name(i, next))
                 case ParsingExpressionStringNode():
-                    generated_exprs.append(self.gen_ParsingExpressionStringNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_string(i, next))
                 case ParsingExpressionCharacterClassNode():
-                    generated_exprs.append(self.gen_ParsingExpressionCharacterClassNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_character_class(i, next))
                 case ParsingExpressionGroupNode():
-                    generated_exprs.append(self.gen_ParsingExpressionGroupNode(i, next, f"{prefix}_{expr_index}_{group_index}"))
+                    generated_exprs.append(self.gen_parsing_expr_group(i, next, f"{prefix}_{expr_index}_{group_index}"))
                     group_index += 1
                 case ParsingExpressionDotNode():
-                    generated_exprs.append(self.gen_ParsingExpressionDotNode(i, next))
+                    generated_exprs.append(self.gen_parsing_expr_dot(i, next))
                 case _:
                     self.gen_type_error(node)
 
@@ -1340,7 +1339,7 @@ class CodeGenerator:
         code += "}\n"
         return code, vars
 
-    def gen_ParsingExpressionGroupNode(self, node: ParsingExpressionGroupNode, next: str, prefix: str) -> GeneratedGroupExpression:
+    def gen_parsing_expr_group(self, node: ParsingExpressionGroupNode, next: str, prefix: str) -> GeneratedGroupExpression:
         code = ""
         vars = []
         body = ""
@@ -1351,7 +1350,7 @@ class CodeGenerator:
                 body += f"{prefix}_NEXT_{i}:\n"
                 body += "this->position = __mark;\n"
             group_next = f"{prefix}_NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else f"{prefix}_FAIL"
-            code_, vars_ = self.gen_ParsingExpression_inside_group(parsing_expression, group_next, i + 1, prefix)
+            code_, vars_ = self.gen_parsing_expr_inside_group(parsing_expression, group_next, i + 1, prefix)
             body += code_
             vars.extend(vars_)
             body += "\n"
@@ -1417,7 +1416,7 @@ class CodeGenerator:
             code += "}\n"
         return GeneratedGroupExpression(code, vars)
 
-    def gen_ParsingExpressionDotNode(self, node: ParsingExpressionDotNode, next: str) -> GeneratedExpression:
+    def gen_parsing_expr_dot(self, node: ParsingExpressionDotNode, next: str) -> GeneratedExpression:
         code = ""
         var = ""
 
