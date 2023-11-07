@@ -263,7 +263,7 @@ class ParsingExpressionSequence(Node):
 @dataclass
 class RuleNode(Node):
     name: str
-    parsing_expression: list[ParsingExpressionSequence]
+    expression_sequences: list[ParsingExpressionSequence]
     return_type: str | None = None
 
 
@@ -629,6 +629,13 @@ def count_by_predicate(container: typing.Iterable, predicate: typing.Callable[[t
     return c
 
 
+def find_by_predicate(container: typing.Iterable, predicate: typing.Callable[[typing.Any], bool]):
+    for item in container:
+        if predicate(item):
+            return item
+    return None
+
+
 @dataclass
 class GeneratedExpression:
     code: str
@@ -656,11 +663,18 @@ class StaticAnalyzer:
     def __init__(self, root_node: BlockStatementNode, filename: str):
         self.root_node = root_node
         self.filename = filename
+        if r := self.get_node_or_none(RootRuleNode):
+            self.root_rule_name = r.name
+        else:
+            self.root_rule_name = self.get_node_or_none(RuleNode).name  # type: ignore
 
     def analyze(self):
+        self.rules_presence()
         self.same_rule_names()
         self.check_directives()
         self.check_rule_name_in_root_directive()
+        self.rule_not_exist_but_used()
+        self.unused_rules()
         self.check_action_presence()  # check for the presence of an action when variables are present
         self.same_var_names_in_parsing_expr_sequence()
         self.group_with_repetition_has_variables_inside()
@@ -669,6 +683,10 @@ class StaticAnalyzer:
         # The return types in all parsing expression sequences must match within the rule
         self.check_return_types_in_parsing_expression_sequences()
         self.check_characters_inside_character_class()
+
+    def rules_presence(self):
+        if self.get_node_or_none(RuleNode) is None:
+            self.error("No rule is defined")
 
     def same_rule_names(self):
         rule_names = self.get_rule_names()
@@ -695,11 +713,43 @@ class StaticAnalyzer:
             if root_rule_node.name not in self.get_rule_names():
                 self.error(f"The directive '%root' contains a non-existing rule: '{root_rule_node.name}'", root_rule_node)
 
+    def rule_not_exist_but_used(self):
+        rule_names = self.get_rule_names()
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for sequence in rule.expression_sequences:
+                    for item in sequence.items:
+                        if isinstance(item, ParsingExpressionRuleNameNode):
+                            if item.name not in rule_names:
+                                self.error(f"The '{rule.name}' rule invokes a nonexistent rule '{item.name}'", item)
+
+    def unused_rules(self):
+        def rule_traversal(rule: RuleNode) -> set[str]:
+            rules = set()
+            for sequence in rule.expression_sequences:
+                for item in sequence.items:
+                    if isinstance(r := item, ParsingExpressionRuleNameNode):
+                        rules.add(r.name)
+                        rules.update(rule_traversal(self.get_rule_by_name(r.name)))
+            return rules
+
+        root_rule = self.get_rule_by_name(self.root_rule_name)
+        used_rules = rule_traversal(root_rule)
+        used_rules.add(root_rule.name)
+        all_rules = set(self.get_rule_names())
+        if len(unused_rules := all_rules - used_rules):
+            error_messages = []
+            for unused_rule_name in unused_rules:
+                unused_rule_node = self.get_rule_by_name(unused_rule_name)
+                error_messages.append(f"{self.filename}:{unused_rule_node.line}:{unused_rule_node.col}:"
+                                      f" Rule '{unused_rule_name}' defined but not used")
+            self.error("\n".join(error_messages))
+
     def check_action_presence(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
                 is_rule_type_specified = bool(rule.return_type)
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     is_var_presence = False
                     for item in parsing_expression_sequence.items:
                         if isinstance(group := item, ParsingExpressionGroupNode):
@@ -723,7 +773,7 @@ class StaticAnalyzer:
         error_message = "In the '{}' rule, variable '{}' is declared multiple times"
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     var_names = []
                     for item in parsing_expression_sequence.items:
                         if isinstance(group := item, ParsingExpressionGroupNode):
@@ -739,7 +789,7 @@ class StaticAnalyzer:
     def group_with_repetition_has_variables_inside(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     for item in parsing_expression_sequence.items:
                         if isinstance(group := item, ParsingExpressionGroupNode):
                             if group.ctx.loop and len(self.get_vars_from_group(group)):
@@ -749,7 +799,7 @@ class StaticAnalyzer:
     def lookahead_false_assigned_to_var(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     for item in parsing_expression_sequence.items:
                         if item.ctx.lookahead and not item.ctx.lookahead_positive and item.ctx.name:
                             self.error(f"In the '{rule.name}' rule, a parsing expression with the '!' operator"
@@ -758,7 +808,7 @@ class StaticAnalyzer:
     def string_assigned_to_var(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     for item in parsing_expression_sequence.items:
                         if isinstance(string := item, ParsingExpressionStringNode):
                             if string.ctx.name:
@@ -771,16 +821,16 @@ class StaticAnalyzer:
     def check_return_types_in_parsing_expression_sequences(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                if len(rule.parsing_expression) > 1:
-                    return_type = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
-                    for parsing_expression_sequence in rule.parsing_expression[1:]:
+                if len(rule.expression_sequences) > 1:
+                    return_type = get_return_type_of_parsing_expression_sequence(rule.expression_sequences[0])
+                    for parsing_expression_sequence in rule.expression_sequences[1:]:
                         if return_type != get_return_type_of_parsing_expression_sequence(parsing_expression_sequence):
                             self.error(f"In the '{rule.name}' rule, parsing expression sequences return different types", rule)
 
     def check_characters_inside_character_class(self):
         for statement in self.root_node.statements:
             if isinstance(rule := statement, RuleNode):
-                for parsing_expression_sequence in rule.parsing_expression:
+                for parsing_expression_sequence in rule.expression_sequences:
                     for item in parsing_expression_sequence.items:
                         if isinstance(character_class := item, ParsingExpressionCharacterClassNode):
                             characters = []
@@ -822,6 +872,9 @@ class StaticAnalyzer:
                                             f" '{escape_string(from_)}-{escape_string(to)}'",
                                             character_class
                                         )
+
+    def get_rule_by_name(self, name: str) -> RuleNode:
+        return find_by_predicate(self.root_node.statements, lambda node: isinstance(node, RuleNode) and node.name == name)  # type: ignore
 
     def get_rule_names(self) -> list[str]:
         rule_names = []
@@ -900,7 +953,7 @@ class CodeGenerator:
             if rule.return_type:
                 self.rules_return_type[rule.name] = CppType(rule.return_type, True)
             else:
-                self.rules_return_type[rule.name] = get_return_type_of_parsing_expression_sequence(rule.parsing_expression[0])
+                self.rules_return_type[rule.name] = get_return_type_of_parsing_expression_sequence(rule.expression_sequences[0])
 
     def start(self):
         self.cpp_file = open(f"{self.parser_name}.cpp", "w", encoding="utf-8")
@@ -1141,11 +1194,11 @@ class CodeGenerator:
         code += f"    return std::any_cast<{return_type.type_}>(__memoized_value);\n"
         code += "}\n\n"
         code += "auto __mark = this->position;\n"
-        for i, parsing_expression in enumerate(node.parsing_expression):
+        for i, parsing_expression in enumerate(node.expression_sequences):
             if i > 0:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
-            next = f"NEXT_{i + 1}" if i + 1 < len(node.parsing_expression) else "FAIL"
+            next = f"NEXT_{i + 1}" if i + 1 < len(node.expression_sequences) else "FAIL"
             code += self.gen_parsing_expr(parsing_expression, next, return_type, i + 1, rule_id)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
