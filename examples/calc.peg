@@ -13,6 +13,7 @@
             std::cout << "enter expression: ";
             std::getline(std::cin, expression);
             PParser::Parser parser(expression);
+            parser.setErrorHandler([](std::string message, size_t _) { std::cout << message << std::endl; });
             if (std::optional<PParser::ExprResult> result; result = parser.parse())
                 std::cout << "result: " << result.value() << std::endl;
             else
@@ -27,11 +28,7 @@ Expression =
     | n1:Number _ "-" _ n2:Number { $$ = n1 - n2; }
     | n1:Number _ "*" _ n2:Number { $$ = n1 * n2; }
     | n1:Number _ "/" _ n2:Number{
-        if (n2 == 0)
-        {
-            std::cout << "Сannot divide by zero" << std::endl;
-            return std::nullopt;
-        }
+        if (n2 == 0) parseError("Сannot divide by zero");
         $$ = n1 / n2;
     }
 
