@@ -265,6 +265,7 @@ class RuleNode(Node):
     name: str
     expression_sequences: list[ParsingExpressionSequence]
     return_type: str | None = None
+    is_left_recursive: bool = False
 
 
 STRING_UNESCAPE_TABLE = {
@@ -659,6 +660,54 @@ class CppType:
         return self.type_
 
 
+class LeftRecursiveAnalyzer:
+    def __init__(self, root_node: BlockStatementNode):
+        self.root_node = root_node
+
+    def analyze(self):
+        for node in self.root_node.statements:
+            if isinstance(rule := node, RuleNode):
+                rule.is_left_recursive = self.is_direct_left_recursive(rule)
+
+    def is_direct_left_recursive(self, rule: RuleNode) -> bool:
+        for sequence in rule.expression_sequences:
+            if first_rule := self.get_first_rule_or_none(sequence):
+                if first_rule.name == rule.name:
+                    return True
+        return False
+
+    def get_first_rule_or_none(self, sequence: ParsingExpressionSequence) -> ParsingExpressionRuleNameNode | None:
+        for item in sequence.items:
+            if isinstance(item, ParsingExpressionRuleNameNode):
+                return item
+            elif not self.is_parsing_expr_consume_zero(item):
+                break
+        return None
+
+    def is_parsing_expr_consume_zero(self, expr: ParsingExpressionNode) -> bool:
+        if expr.ctx.optional \
+            or expr.ctx.lookahead \
+            or expr.ctx.loop and not expr.ctx.loop_nonempty \
+            or isinstance(expr, ParsingExpressionRuleNameNode) and self.is_rule_consume_zero(expr.name):
+            return True
+        return False
+
+    def is_rule_consume_zero(self, rule_name: str) -> bool:
+        rule = self.get_rule_by_name(rule_name)
+        for sequence in rule.expression_sequences:
+            zero_consume = True
+            for item in sequence.items:
+                if not self.is_parsing_expr_consume_zero(item):
+                    zero_consume = False
+                    break
+            if zero_consume: return True
+        return False
+
+    def get_rule_by_name(self, rule_name: str) -> RuleNode:
+        return find_by_predicate(
+            self.root_node.statements, lambda node: isinstance(node, RuleNode) and node.name == rule_name)  # type: ignore
+
+
 class StaticAnalyzer:
     def __init__(self, root_node: BlockStatementNode, filename: str):
         self.root_node = root_node
@@ -675,6 +724,8 @@ class StaticAnalyzer:
         self.check_rule_name_in_root_directive()
         self.rule_not_exist_but_used()
         self.unused_rules()
+        LeftRecursiveAnalyzer(self.root_node).analyze()  # only after check unused rules
+        self.wrong_left_recursive_rules()
         self.check_action_presence()  # check for the presence of an action when variables are present
         self.same_var_names_in_parsing_expr_sequence()
         self.group_with_repetition_has_variables_inside()
@@ -724,13 +775,16 @@ class StaticAnalyzer:
                                 self.error(f"The '{rule.name}' rule invokes a nonexistent rule '{item.name}'", item)
 
     def unused_rules(self):
+        checked_rules = []
         def rule_traversal(rule: RuleNode) -> set[str]:
+            checked_rules.append(rule.name)
             rules = set()
             for sequence in rule.expression_sequences:
                 for item in sequence.items:
                     if isinstance(r := item, ParsingExpressionRuleNameNode):
-                        rules.add(r.name)
-                        rules.update(rule_traversal(self.get_rule_by_name(r.name)))
+                        if r.name not in checked_rules:
+                            rules.add(r.name)
+                            rules.update(rule_traversal(self.get_rule_by_name(r.name)))
             return rules
 
         root_rule = self.get_rule_by_name(self.root_rule_name)
@@ -744,6 +798,13 @@ class StaticAnalyzer:
                 error_messages.append(f"{self.filename}:{unused_rule_node.line}:{unused_rule_node.col}:"
                                       f" Rule '{unused_rule_name}' defined but not used")
             self.error("\n".join(error_messages))
+
+    def wrong_left_recursive_rules(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                if rule.is_left_recursive:
+                    if len(rule.expression_sequences) == 1:
+                        self.error(f"In the '{rule.name}' name, a left-recursive rule must be at least 2 sequences of expressions", rule)
 
     def check_action_presence(self):
         for statement in self.root_node.statements:
@@ -940,11 +1001,7 @@ class CodeGenerator:
             self.root_rule = root_rule_node.name
 
     def get_node_or_none(self, node_type: typing.Type[RT]) -> RT | None:
-        node = [node for node in self.root_node.statements if isinstance(node, node_type)]
-        for node in self.root_node.statements:
-            if isinstance(node, node_type):
-                return node
-        return None
+        return find_by_predicate(self.root_node.statements, lambda item: isinstance(item, node_type))
 
     def type_analysis(self):
         for node in self.root_node.statements:
@@ -1179,48 +1236,94 @@ class CodeGenerator:
 
     def gen_rule(self, node: RuleNode, rule_id: int):
         return_type = self.rules_return_type[node.name]
+        fail_return_value = 'std::nullopt' if return_type.is_optional else 'false'
         write_lines(self.hpp_file, f"        {return_type} rule__{node.name}();")
-        write_lines(
-            self.cpp_file,
-            f"    {return_type} Parser::rule__{node.name}()",
-            "    {",
-        )
+        if not node.is_left_recursive:
+            write_lines(
+                self.cpp_file,
+                f"    {return_type} Parser::rule__{node.name}()",
+                "    {",
+            )
+        else:
+            write_lines(self.hpp_file, f"        {return_type} rule__{node.name}_();")
+            write_lines(
+                self.cpp_file,
+                f"    {return_type} Parser::rule__{node.name}()",
+                "    {",
+                "        auto mark = this->position;",
+                f"        auto memoized = this->memoGet({rule_id});",
+                "        if (memoized.has_value())",
+                "        {",
+                "            auto& [memoized_value, memoized_position] = memoized.value();",
+                "            this->position = memoized_position;",
+                f"            if (!memoized_value.has_value()) return {fail_return_value};",
+                f"            return std::any_cast<{return_type.type_}>(memoized_value);",
+                "        }",
+                "        else",
+                "        {",
+                "            auto last_position = mark;",
+                f"            this->memoSet({rule_id}, {{}}, mark);",
+                f"            {return_type.type_} last_result;",
+                "",
+                "            for(;;)",
+                "            {",
+                "                this->position = mark;",
+                f"                auto result = rule__{node.name}_();",
+                "                auto end_position = this->position;",
+                "                if (end_position <= last_position) break;",
+                f"                this->memoSet({rule_id}, result{'.value()' if return_type.is_optional else ''}, mark);",
+                f"                last_result = result{'.value()' if return_type.is_optional else ''};",
+                f"                last_position = end_position;",
+                "            }",
+                "",
+                f"            if (last_position == mark) return {fail_return_value};",
+                "            this->position = last_position;",
+                f"            return std::any_cast<{return_type.type_}>(last_result);",
+                "        }",
+                "    }",
+                "",
+            )
+
+            write_lines(
+                self.cpp_file,
+                f"    {return_type} Parser::rule__{node.name}_()",
+                "    {",
+            )
         code = ""
-        code += f"auto __memoized = this->memoGet({rule_id});\n"
-        code += f"if (__memoized.has_value())\n"
-        code += "{\n"
-        code += "    auto& [__memoized_value, __memoized_position] = __memoized.value();\n"
-        code += "    this->position = __memoized_position;\n"
-        code += f"    return std::any_cast<{return_type.type_}>(__memoized_value);\n"
-        code += "}\n\n"
+        if not node.is_left_recursive:
+            code += f"auto __memoized = this->memoGet({rule_id});\n"
+            code += f"if (__memoized.has_value())\n"
+            code += "{\n"
+            code += "    auto& [__memoized_value, __memoized_position] = __memoized.value();\n"
+            code += "    this->position = __memoized_position;\n"
+            code += f"    if (!__memoized_value.has_value()) return {fail_return_value};\n"
+            code += f"    return std::any_cast<{return_type.type_}>(__memoized_value);\n"
+            code += "}\n\n"
         code += "auto __mark = this->position;\n"
         for i, parsing_expression in enumerate(node.expression_sequences):
             if i > 0:
                 code += f"NEXT_{i}:\n"
                 code += "this->position = __mark;\n"
             next = f"NEXT_{i + 1}" if i + 1 < len(node.expression_sequences) else "FAIL"
-            code += self.gen_parsing_expr(parsing_expression, next, return_type, i + 1, rule_id)
+            code += self.gen_parsing_expr(parsing_expression, next, return_type, i + 1, rule_id, node.is_left_recursive)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
-        fail_return_value = 'std::nullopt' if return_type.is_optional else 'false'
-        write_lines(
-            self.cpp_file,
+        write_lines(self.cpp_file,
             "    FAIL:",
             "        this->position = __mark;",
-            f"        this->memoSet({rule_id}, {fail_return_value}, __mark);",
-            f"        return {fail_return_value};",
         )
+        if not node.is_left_recursive:
+            write_lines(self.cpp_file, f"        this->memoSet({rule_id}, {{}}, __mark);")
+        write_lines(self.cpp_file, f"        return {fail_return_value};")
         if not return_type.is_optional:
-            write_lines(
-                self.cpp_file,
-                "    SUCCESS:",
-                f"        this->memoSet({rule_id}, true, __mark);",
-                "        return true;",
-            )
+            write_lines(self.cpp_file, "    SUCCESS:")
+            if not node.is_left_recursive:
+                write_lines(self.cpp_file, f"        this->memoSet({rule_id}, true, __mark);")
+            write_lines(self.cpp_file, "        return true;")
         write_lines(self.cpp_file, "    }", "")
 
     def gen_parsing_expr(
-            self, node: ParsingExpressionSequence, next: str, return_type: CppType, expr_index: int, rule_id: int):
+            self, node: ParsingExpressionSequence, next: str, return_type: CppType, expr_index: int, rule_id: int, is_left_recursive: bool):
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         for i in node.items:
@@ -1266,7 +1369,8 @@ class CodeGenerator:
                 code += f"        {return_type.type_} __rule_result;\n"
                 code += set_indent(node.action.replace("$$", "__rule_result"), 8)
                 code += "\n"
-                code += f"        this->memoSet({rule_id}, __rule_result, __mark);\n"
+                if not is_left_recursive:
+                    code += f"        this->memoSet({rule_id}, __rule_result, __mark);\n"
                 code += "        return __rule_result;\n"
             else:
                 code += set_indent(node.action, 8)
@@ -1668,8 +1772,7 @@ def generate_parser(file):
     tokenizer = Tokenizer(file)
     parser = Parser(tokenizer)
     root_node = parser.parse()
-    static_analyzer = StaticAnalyzer(root_node, filename)
-    static_analyzer.analyze()
+    StaticAnalyzer(root_node, filename).analyze()
     code_gen = CodeGenerator(root_node, filename)
     code_gen.start()
 

@@ -6,7 +6,7 @@ pparser is [peg](https://en.wikipedia.org/wiki/Parsing_expression_grammar) parse
 - [x] generation of a parser in C++ code
 - [x] support for unicode
 - [x] support for various return types for rules
-- [ ] support for left-recursive rules
+- [x] support for direct left-recursive rules
 - [x] support for the Packrat parsing algorithm
 
 ## Usage
