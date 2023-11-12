@@ -1066,6 +1066,7 @@ class CodeGenerator:
             "#include <unordered_map>",
             "#include <any>",
             "#include <tuple>",
+            "#include <iostream>",
             "",
         )
 
@@ -1182,6 +1183,7 @@ class CodeGenerator:
             f"            return rule__{self.root_rule}();",
             "        } catch (const ParsingFail& error) {",
             "            if (errorHandler) errorHandler(error.message, error.position);",
+            "            else { std::cerr << \"Error at position \" << error.position << \": \" << error.message << std::endl; }",
             f"            return {'std::nullopt' if self.rules_return_type[self.root_rule].is_optional else 'false'};",
             "        }",
             "    }",
