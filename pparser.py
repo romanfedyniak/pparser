@@ -53,6 +53,7 @@ class TokenType(enum.Enum):
     STRING = re.compile(r"\".+?(?<!\\)\"")
     CHARACTER_CLASS = re.compile(r"\[.+?(?<!\\)\]")
     DOT = re.compile(r"\.")
+    TILDE = re.compile(r"~")
     # special tokens
     CODE_SECTION = enum.auto()
     ACTION = enum.auto()
@@ -257,7 +258,8 @@ class ParsingExpressionDotNode(ParsingExpressionNode):
 @dataclass
 class ParsingExpressionSequence(Node):
     items: list[ParsingExpressionNode]
-    action: str | None
+    action: str | None = None
+    error_action: str | None = None
 
 
 @dataclass
@@ -435,7 +437,7 @@ class Parser:
         with self.manager:
             lpar = self.match(TokenType.LPAR)
             parsing_expressions = self.loop(True, self.parsing_expression_)
-            group = ParsingExpressionGroupNode([ParsingExpressionSequence(i, None).set_pos(lpar) for i in parsing_expressions]).set_pos(lpar)
+            group = ParsingExpressionGroupNode([ParsingExpressionSequence(i).set_pos(lpar) for i in parsing_expressions]).set_pos(lpar)
             self.match(TokenType.RPAR)
             return group
         with self.manager:
@@ -500,11 +502,22 @@ class Parser:
             return self.loop(True, self.parsing_expression_named_item_or_item)
         raise ParsingFail
 
+    def error_action(self):
+        with self.manager:
+            self.match(TokenType.TILDE)
+            return self.match(TokenType.ACTION)
+        return None
+
     def parsing_expression(self):
         with self.manager:
             parsing_expression = self.parsing_expression_()
             action = self.optional(TokenType.ACTION)
-            node = ParsingExpressionSequence(parsing_expression, action.value if action else None)
+            error_action = self.error_action()
+            node = ParsingExpressionSequence(
+                parsing_expression,
+                action.value if action else None,
+                error_action.value if error_action else None
+            )
             node.line = parsing_expression[0].line
             node.col = parsing_expression[0].col
             return node
@@ -1302,6 +1315,7 @@ class CodeGenerator:
             code += f"    return std::any_cast<{return_type.type_}>(__memoized_value);\n"
             code += "}\n\n"
         code += "auto __mark = this->position;\n"
+
         for i, parsing_expression in enumerate(node.expression_sequences):
             if i > 0:
                 code += f"NEXT_{i}:\n"
@@ -1310,10 +1324,12 @@ class CodeGenerator:
             code += self.gen_parsing_expr(parsing_expression, next, return_type, i + 1, rule_id, node.is_left_recursive)
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
+
         write_lines(self.cpp_file,
             "    FAIL:",
             "        this->position = __mark;",
         )
+
         if not node.is_left_recursive:
             write_lines(self.cpp_file, f"        this->memoSet({rule_id}, {{}}, __mark);")
         write_lines(self.cpp_file, f"        return {fail_return_value};")
@@ -1328,6 +1344,8 @@ class CodeGenerator:
             self, node: ParsingExpressionSequence, next: str, return_type: CppType, expr_index: int, rule_id: int, is_left_recursive: bool):
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
+        if node.error_action:
+            next = f"ERROR_ACTION_{expr_index}"
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
@@ -1365,8 +1383,7 @@ class CodeGenerator:
             code += add_indent(g.code, 4)
             code += "\n"
         if node.action:
-            code += "    // action\n"
-            code += "    {\n"
+            code += "    { // action\n"
             if "$$" in node.action:
                 code += f"        {return_type.type_} __rule_result;\n"
                 code += set_indent(node.action.replace("$$", "__rule_result"), 8)
@@ -1377,10 +1394,17 @@ class CodeGenerator:
             else:
                 code += set_indent(node.action, 8)
                 code += "\n"
-            code += "    }\n"
-            code += "    // end of action\n"
+            code += "    } // end of action\n"
         if node.action is None or "$$" not in node.action:
             code += "    goto SUCCESS;\n"
+        if node.error_action:
+            code +="\n"
+            code += f"{next}:\n"
+            code += "    { // error action\n"
+            code += set_indent(node.error_action, 8)
+            code += "\n"
+            code += "    } // end of error action\n"
+            code += f"    goto {next};\n"
         code += "}\n"
         return code
 

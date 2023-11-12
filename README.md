@@ -98,7 +98,7 @@ Statement = Value # starts from here
 ### Rules
 Syntax:
 ```
-<RuleName> <return type> = <parsing expression sequence> { <c++ code> }
+<RuleName> <return type> = <parsing expression sequence> { <C++ code> }  ~{ <C++ code> }
 ```
 - RuleName - this is the name of a rule, and it can consist of letters, digits, and underscores, but it cannot start with a digit. Names are case-sensitive.
 
@@ -180,7 +180,7 @@ Rule =
 ```
 
 #### Action
-The action is arbitrary C++ code that executes at the end of the match.
+The action is arbitrary C++ code to be executed at the end of a matching.
 ```
 Rule = [0-9]+ { std::cout << "number\n"; }
 ```
@@ -188,6 +188,15 @@ Rule = [0-9]+ { std::cout << "number\n"; }
 Inside an action, you can use '`$$`', which represents the output variable. The type of this variable is determined by the `%type` directive, or if it is not defined, it defaults to `size_t`.
 ```
 Rule = "42" { $$ = 42; }
+```
+
+#### Error Action
+The action is arbitrary C++ code to be executed at the end of a matching only if matching fails.
+```
+Rule = [0-9]+ ~{ parseError("expected number"); }
+
+# Actions and error actions can be used together
+Rule = [0-9]+ { std::cout << "number\n"; } ~{ parseError("expected number"); }
 ```
 
 #### Variable
