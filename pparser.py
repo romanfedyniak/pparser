@@ -664,13 +664,27 @@ class GeneratedGroupExpression:
 
 @dataclass
 class CppType:
-    type_: str
+    raw_type: str
     is_optional: bool = False
 
     def __str__(self) -> str:
         if self.is_optional:
-            return f"std::optional<{self.type_}>"
-        return self.type_
+            return f"std::optional<{self.raw_type}>"
+        return self.raw_type
+
+    @property
+    def null(self) -> str:
+        if self.is_optional:
+            return "std::nullopt"
+        if self.raw_type == "bool":
+            return "false"
+        assert False, f"not implemented for type '{self.raw_type}'"
+
+    @property
+    def getter(self) -> str:
+        if self.is_optional:
+            return ".value()"
+        return ""
 
 
 class LeftRecursiveAnalyzer:
@@ -1197,7 +1211,7 @@ class CodeGenerator:
             "        } catch (const ParsingFail& error) {",
             "            if (errorHandler) errorHandler(error.message, error.position);",
             "            else { std::cerr << \"Error at position \" << error.position << \": \" << error.message << std::endl; }",
-            f"            return {'std::nullopt' if self.rules_return_type[self.root_rule].is_optional else 'false'};",
+            f"            return {self.rules_return_type[self.root_rule].null};",
             "        }",
             "    }",
             "",
@@ -1251,7 +1265,6 @@ class CodeGenerator:
 
     def gen_rule(self, node: RuleNode, rule_id: int):
         return_type = self.rules_return_type[node.name]
-        fail_return_value = 'std::nullopt' if return_type.is_optional else 'false'
         write_lines(self.hpp_file, f"        {return_type} rule__{node.name}();")
         if not node.is_left_recursive:
             write_lines(
@@ -1271,14 +1284,14 @@ class CodeGenerator:
                 "        {",
                 "            auto& [memoized_value, memoized_position] = memoized.value();",
                 "            this->position = memoized_position;",
-                f"            if (!memoized_value.has_value()) return {fail_return_value};",
-                f"            return std::any_cast<{return_type.type_}>(memoized_value);",
+                f"            if (!memoized_value.has_value()) return {return_type.null};",
+                f"            return std::any_cast<{return_type.raw_type}>(memoized_value);",
                 "        }",
                 "        else",
                 "        {",
                 "            auto last_position = mark;",
                 f"            this->memoSet({rule_id}, {{}}, mark);",
-                f"            {return_type.type_} last_result;",
+                f"            {return_type.raw_type} last_result;",
                 "",
                 "            for(;;)",
                 "            {",
@@ -1286,14 +1299,14 @@ class CodeGenerator:
                 f"                auto result = rule__{node.name}_();",
                 "                auto end_position = this->position;",
                 "                if (end_position <= last_position) break;",
-                f"                this->memoSet({rule_id}, result{'.value()' if return_type.is_optional else ''}, mark);",
-                f"                last_result = result{'.value()' if return_type.is_optional else ''};",
+                f"                this->memoSet({rule_id}, result{return_type.getter}, mark);",
+                f"                last_result = result{return_type.getter};",
                 f"                last_position = end_position;",
                 "            }",
                 "",
-                f"            if (last_position == mark) return {fail_return_value};",
+                f"            if (last_position == mark) return {return_type.null};",
                 "            this->position = last_position;",
-                f"            return std::any_cast<{return_type.type_}>(last_result);",
+                f"            return std::any_cast<{return_type.raw_type}>(last_result);",
                 "        }",
                 "    }",
                 "",
@@ -1311,8 +1324,8 @@ class CodeGenerator:
             code += "{\n"
             code += "    auto& [__memoized_value, __memoized_position] = __memoized.value();\n"
             code += "    this->position = __memoized_position;\n"
-            code += f"    if (!__memoized_value.has_value()) return {fail_return_value};\n"
-            code += f"    return std::any_cast<{return_type.type_}>(__memoized_value);\n"
+            code += f"    if (!__memoized_value.has_value()) return {return_type.null};\n"
+            code += f"    return std::any_cast<{return_type.raw_type}>(__memoized_value);\n"
             code += "}\n\n"
         code += "auto __mark = this->position;\n"
 
@@ -1332,7 +1345,7 @@ class CodeGenerator:
 
         if not node.is_left_recursive:
             write_lines(self.cpp_file, f"        this->memoSet({rule_id}, {{}}, __mark);")
-        write_lines(self.cpp_file, f"        return {fail_return_value};")
+        write_lines(self.cpp_file, f"        return {return_type.null};")
         if not return_type.is_optional:
             write_lines(self.cpp_file, "    SUCCESS:")
             if not node.is_left_recursive:
@@ -1385,7 +1398,7 @@ class CodeGenerator:
         if node.action:
             code += "    { // action\n"
             if "$$" in node.action:
-                code += f"        {return_type.type_} __rule_result;\n"
+                code += f"        {return_type.raw_type} __rule_result;\n"
                 code += set_indent(node.action.replace("$$", "__rule_result"), 8)
                 code += "\n"
                 if not is_left_recursive:
@@ -1419,22 +1432,22 @@ class CodeGenerator:
             code += f"   if({'!' if node.ctx.lookahead_positive else ''}("
             if node.ctx.name:
                 code += "auto __result = "
-                var = f"{return_type.type_} {node.ctx.name};"
+                var = f"{return_type.raw_type} {node.ctx.name};"
             code += f"rule__{node.name}())) goto {next};\n"
             if node.ctx.name:
-                code += f"else {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
+                code += f"else {node.ctx.name} = __result{return_type.getter};\n"
             code += "   position = __tempMark;\n"
             code += "}\n"
         elif node.ctx.optional:
             if node.ctx.name:
-                var = f"std::optional<{return_type.type_}> {node.ctx.name};"
+                var = f"std::optional<{return_type.raw_type}> {node.ctx.name};"
                 code += "auto __result = "
             code += f"(rule__{node.name}());\n"
             if node.ctx.name:
-                code += f"if (__result) {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
+                code += f"if (__result) {node.ctx.name} = __result{return_type.getter};\n"
         elif node.ctx.loop:
             if node.ctx.name:
-                var = f"std::vector<{return_type.type_}> {node.ctx.name};"
+                var = f"std::vector<{return_type.raw_type}> {node.ctx.name};"
             code += "{\n"
             if node.ctx.loop_nonempty:
                 code += "    size_t __i = 0;\n"
@@ -1442,7 +1455,7 @@ class CodeGenerator:
             code += "    {\n"
             code += f"        if (!({'auto __result = ' if node.ctx.name else ''} rule__{node.name}())) break;\n"
             if node.ctx.name:
-                code += f"        {node.ctx.name}.push_back(__result{'.value()' if return_type.is_optional else ''});\n"
+                code += f"        {node.ctx.name}.push_back(__result{return_type.getter});\n"
             if node.ctx.loop_nonempty:
                 code += "        __i++;\n"
             code += "    }\n"
@@ -1452,14 +1465,14 @@ class CodeGenerator:
         else:
             code += "{\n"
             if node.ctx.name:
-                var = f"{return_type.type_} {node.ctx.name};"
+                var = f"{return_type.raw_type} {node.ctx.name};"
                 code += f"    {return_type} __result;\n"
             code += "    if (!("
             if node.ctx.name:
                 code += "__result = "
             code += f"rule__{node.name}())) goto {next};\n"
             if node.ctx.name:
-                code += f"    {node.ctx.name} = __result{'.value()' if return_type.is_optional else ''};\n"
+                code += f"    {node.ctx.name} = __result{return_type.getter};\n"
             code += "}\n"
         return GeneratedExpression(code, var)
 
