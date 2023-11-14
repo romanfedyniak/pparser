@@ -282,7 +282,7 @@ Parser::Parser(std::string_view src);
 Constructor. Accepts a sequence of characters to be parsed.
 
 ```cpp
-Parser::Result Parser::parse();
+"return type" Parser::parse();
 ```
 Initiates parsing. The return type of the method is the same as in the root rule, wrapped in `std::optional`, in case the return type is not `bool`.
 
