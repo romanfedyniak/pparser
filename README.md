@@ -1,6 +1,6 @@
 # pparser
 
-pparser is [peg](https://en.wikipedia.org/wiki/Parsing_expression_grammar) parser generator for C++.
+pparser is [peg](https://en.wikipedia.org/wiki/Parsing_expression_grammar) parser generator for C++ 17.
 
 ## Features
 - [x] generation of a parser in C++ code
