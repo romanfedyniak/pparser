@@ -260,6 +260,7 @@ class ParsingExpressionSequence(Node):
     items: list[ParsingExpressionNode]
     action: str | None = None
     error_action: str | None = None
+    position_vars: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -516,8 +517,9 @@ class Parser:
             node = ParsingExpressionSequence(
                 parsing_expression,
                 action.value if action else None,
-                error_action.value if error_action else None
+                error_action.value if error_action else None,
             )
+            if action: node.position_vars.update(re.findall(r"\$([1-9][0-9]*)", action.value))
             node.line = parsing_expression[0].line
             node.col = parsing_expression[0].col
             return node
@@ -761,6 +763,7 @@ class StaticAnalyzer:
         # The return types in all parsing expression sequences must match within the rule
         self.check_return_types_in_parsing_expression_sequences()
         self.check_characters_inside_character_class()
+        self.check_position_vars_in_action()
 
     def rules_presence(self):
         if self.get_node_or_none(RuleNode) is None:
@@ -961,6 +964,15 @@ class StaticAnalyzer:
                                             character_class
                                         )
 
+    def check_position_vars_in_action(self):
+        for statement in self.root_node.statements:
+            if isinstance(rule := statement, RuleNode):
+                for sequence in rule.expression_sequences:
+                    if vars := sequence.position_vars:
+                        for var in vars:
+                            if int(var) > len(sequence.items):
+                                self.error(f"'${var}', the index exceeds the number of expressions", sequence)
+
     def get_rule_by_name(self, name: str) -> RuleNode:
         return find_by_predicate(self.root_node.statements, lambda node: isinstance(node, RuleNode) and node.name == name)  # type: ignore
 
@@ -1094,6 +1106,7 @@ class CodeGenerator:
             "#include <any>",
             "#include <tuple>",
             "#include <iostream>",
+            "#include <vector>"
             "",
         )
 
@@ -1113,6 +1126,14 @@ class CodeGenerator:
             "",
             f"    using ExprResult = {self.rule_type};",
             "",
+            "    struct TokenPos",
+            "    {",
+            "        size_t startCol;",
+            "        size_t startLine;",
+            "        size_t endCol;",
+            "        size_t endLine;",
+            "    };",
+            "",
             "    class Parser",
             "    {",
             "    private:",
@@ -1121,6 +1142,7 @@ class CodeGenerator:
             "        const std::string_view src;",
             "        size_t position = 0;",
             f"        std::array<std::unordered_map<size_t, std::tuple<std::any, size_t>>, {rule_count}> memos;",
+            "        std::vector<size_t> lineNumbers;",
             "",
             "        ////////// BEGINNING OF RULES //////////",
         )
@@ -1198,6 +1220,28 @@ class CodeGenerator:
             "        throw ParsingFail{msg, this->position};",
             "    }",
             "",
+            "    size_t Parser::getLineFromPosition(size_t pos) const",
+            "    {",
+            "        auto it = std::lower_bound(this->lineNumbers.cbegin(), this->lineNumbers.cend(), pos + 1);",
+            "        if (it == this->lineNumbers.cend()) return this->lineNumbers.size() + 1;",
+            "        return it - this->lineNumbers.cbegin() + 1;",
+            "    }",
+            "",
+            "    size_t Parser::getColFromPosition(size_t pos, size_t line) const",
+            "    {",
+            "        if (line == 1) return pos + 1;",
+            "        if (line >= this->lineNumbers.size()) return pos - this->lineNumbers.back() + 1;",
+            "        size_t start_line = this->lineNumbers[line - 1];",
+            "        return start_line - pos + 1;",
+            "    }",
+            "",
+            "    void Parser::calculateLineNumbers()",
+            "    {",
+            "        if (this->lineNumbers.size() != 0) return;",
+            "        for (size_t i = 0; i < this->src.size(); ++i)",
+            "            if (this->src[i] == '\\n') this->lineNumbers.push_back(i + 1);",
+            "    }",
+            "",
             "    void Parser::setErrorHandler(errorHandler_t handler)",
             "    {",
             "        errorHandler = handler;",
@@ -1205,6 +1249,7 @@ class CodeGenerator:
             "",
             "    Parser::Result Parser::parse() noexcept",
             "    {",
+            "        this->calculateLineNumbers();",
             "        this->position = 0;",
             "        try {",
             f"            return rule__{self.root_rule}();",
@@ -1229,6 +1274,9 @@ class CodeGenerator:
             "        std::optional<std::tuple<std::any, size_t>> memoGet(size_t ruleId) const;",
             "        void memoSet(size_t ruleId, std::any value, size_t start_position);",
             "        void parseError(const std::string& msg) const;",
+            "        size_t getLineFromPosition(size_t pos) const;",
+            "        size_t getColFromPosition(size_t pos, size_t line) const;",
+            "        void calculateLineNumbers();",
             "",
             "    public:",
             "        void setErrorHandler(errorHandler_t handler);",
@@ -1392,20 +1440,32 @@ class CodeGenerator:
             code += "    // User defined variables\n"
             code += add_indent(vars_declaration, 4)
             code += "    // end variables\n\n"
-        for g in generated_exprs:
+        for i, g in enumerate(generated_exprs, 1):
+            save_pos = str(i) in node.position_vars
+            if save_pos:
+                code += f"    TokenPos __token_pos_{i};\n"
+                code += f"    __token_pos_{i}.startLine = this->getLineFromPosition(this->position);\n"
+                code += f"    __token_pos_{i}.startCol = this->getColFromPosition(this->position, __token_pos_{i}.startLine);\n\n"
             code += add_indent(g.code, 4)
             code += "\n"
-        if node.action:
+            if save_pos:
+                code += f"    __token_pos_{i}.endLine = this->getLineFromPosition(this->position);\n"
+                code += f"    __token_pos_{i}.endCol = this->getColFromPosition(this->position, __token_pos_{i}.endLine);\n\n"
+        if action_code := node.action:
             code += "    { // action\n"
+            for var in node.position_vars:
+                if f"${var}" in action_code:
+                    action_code = action_code.replace(f"${var}", f"__token_pos_{var}")
             if "$$" in node.action:
                 code += f"        {return_type.raw_type} __rule_result;\n"
-                code += set_indent(node.action.replace("$$", "__rule_result"), 8)
+                action_code = action_code.replace("$$", "__rule_result")
+                code += set_indent(action_code, 8)
                 code += "\n"
                 if not is_left_recursive:
                     code += f"        this->memoSet({rule_id}, __rule_result, __mark);\n"
                 code += "        return __rule_result;\n"
             else:
-                code += set_indent(node.action, 8)
+                code += set_indent(action_code, 8)
                 code += "\n"
             code += "    } // end of action\n"
         if node.action is None or "$$" not in node.action:

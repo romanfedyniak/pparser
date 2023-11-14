@@ -185,9 +185,32 @@ The action is arbitrary C++ code to be executed at the end of a matching.
 Rule = [0-9]+ { std::cout << "number\n"; }
 ```
 
-Inside an action, you can use '`$$`', which represents the output variable. The type of this variable is determined by the `%type` directive, or if it is not defined, it defaults to `size_t`.
+Inside actions, you can use special variables.
++ `$$` - represents the output variable. The type of this variable is determined by the `%type` directive, or if it is not defined, it defaults to `size_t`.
 ```
 Rule = "42" { $$ = 42; }
+```
+
++ `$`n - position of the expression. Where n is a number from 1 to the number of expressions.
+```cpp
+namespace PParser
+{
+    // The type of the variable is a structure:
+    struct TokenPos
+    {
+        size_t startCol;
+        size_t startLine;
+        size_t endCol;
+        size_t endLine;
+    };
+}
+```
+```
+Number = [1-9] [0-9]+
+Rule = Number "+" Number {
+    std::cout << $1.startCol << std::endl;  # position of the first 'Number'
+    std::cout << $3.startCol << std::endl;  # position of the second 'Number'
+}
 ```
 
 #### Error Action
