@@ -50,8 +50,8 @@ class TokenType(enum.Enum):
     RCBRACKET = re.compile(r"}")
     PERCENT = re.compile(r"%")
     COLON = re.compile(r":")
-    STRING = re.compile(r"\".+?(?<!\\)\"")
-    CHARACTER_CLASS = re.compile(r"\[.+?(?<!\\)\]")
+    STRING = re.compile(r"\"[^\"\\]*(\\.[^\"\\]*)*\"")
+    CHARACTER_CLASS = re.compile(r"\[[^\]\\]*(\\.[^\]\\]*)*\]")
     DOT = re.compile(r"\.")
     TILDE = re.compile(r"~")
     # special tokens
@@ -318,6 +318,7 @@ def escape_string(string: str) -> str:
         "\r": "r",
         "\t": "t",
         "\v": "v",
+        "\\": "\\",
     }
     new_string = ""
     for ch in string:
@@ -1544,7 +1545,7 @@ class CodeGenerator:
 
         i = 0
         for ch in node.value:
-            if ord(ch) < 255:
+            if ord(ch) < 128:
                 str_condition += f"   && this->src[this->position + {i}] == '{escape_string(ch)}'\n"
                 i += 1
             else:
@@ -1612,12 +1613,14 @@ class CodeGenerator:
         i = 0
         while i < len(characters):
             ch = characters[i]
+            escaped_ch = escape_string(ch) if ch != "\\" else "'\\'"
             if i + 2 < len(characters) and characters[i + 1] == "-":
                 condition += f"    || __ch >= 0x{ord(ch):06x}"
-                condition += f" && __ch <= 0x{ord(characters[i + 2]):06x} // {escape_string(ch)}, {escape_string(characters[i + 2])}\n"
+                escaped_ch2 = escape_string(characters[i + 2]) if characters[i + 2] != "\\" else "'\\'"
+                condition += f" && __ch <= 0x{ord(characters[i + 2]):06x} // {escaped_ch}, {escaped_ch2}\n"
                 i += 2
             else:
-                condition += f"    || __ch == 0x{ord(ch):06x} // {escape_string(ch)}\n"
+                condition += f"    || __ch == 0x{ord(ch):06x} // {escaped_ch}\n"
             i += 1
         return condition
 
