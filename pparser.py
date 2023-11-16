@@ -273,6 +273,7 @@ class RuleNode(Node):
 
 STRING_UNESCAPE_TABLE = {
     "\\": "\\",
+    "\"": "\"",
     "a": "\a",
     "b": "\b",
     "f": "\f",
