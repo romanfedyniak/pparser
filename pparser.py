@@ -710,6 +710,8 @@ class LeftRecursiveAnalyzer:
         for item in sequence.items:
             if isinstance(item, ParsingExpressionRuleNameNode):
                 return item
+            elif isinstance(item, ParsingExpressionGroupNode):
+                return self.get_first_rule_or_none(item.parsing_expression[0])
             elif not self.is_parsing_expr_consume_zero(item):
                 break
         return None
@@ -807,6 +809,18 @@ class StaticAnalyzer:
 
     def unused_rules(self):
         checked_rules = []
+        def group_traversal(group: ParsingExpressionGroupNode) -> set[str]:
+            rules = set()
+            for sequence in group.parsing_expression:
+                for item in sequence.items:
+                    if isinstance(r := item, ParsingExpressionRuleNameNode):
+                        if r.name not in checked_rules:
+                            rules.add(r.name)
+                            rules.update(rule_traversal(self.get_rule_by_name(r.name)))
+                    elif isinstance(g := item, ParsingExpressionGroupNode):
+                        rules.update(group_traversal(g))
+            return rules
+
         def rule_traversal(rule: RuleNode) -> set[str]:
             checked_rules.append(rule.name)
             rules = set()
@@ -816,6 +830,8 @@ class StaticAnalyzer:
                         if r.name not in checked_rules:
                             rules.add(r.name)
                             rules.update(rule_traversal(self.get_rule_by_name(r.name)))
+                    elif isinstance(g := item, ParsingExpressionGroupNode):
+                        rules.update(group_traversal(g))
             return rules
 
         root_rule = self.get_rule_by_name(self.root_rule_name)
