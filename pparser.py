@@ -1423,6 +1423,7 @@ class CodeGenerator:
         group_index = 1
         generated_exprs: list[GeneratedExpression | GeneratedGroupExpression] = []
         if node.error_action:
+            real_next = next
             next = f"ERROR_ACTION_{expr_index}"
         for i in node.items:
             match i:
@@ -1494,7 +1495,7 @@ class CodeGenerator:
             code += set_indent(node.error_action, 8)
             code += "\n"
             code += "    } // end of error action\n"
-            code += f"    goto {next};\n"
+            code += f"    goto {real_next};\n"  # type: ignore
         code += "}\n"
         return code
 
