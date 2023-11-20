@@ -331,6 +331,14 @@ def escape_string(string: str) -> str:
     return new_string
 
 
+def string_to_bytes(string: str) -> bytes:
+    return re.sub(
+            rb"\\x[0-9a-fA-F]{2}",
+            lambda x: int(x.group(0)[-2:], 16).to_bytes(1, "big"),
+            string.encode()
+        )
+
+
 class ParsingFail(Exception):
     pass
 
@@ -1561,20 +1569,15 @@ class CodeGenerator:
     def gen_parsing_expr_string(self, node: ParsingExpressionStringNode, next: str) -> GeneratedExpression:
         var = None
         code = ""
-        str_bytes = node.value.encode()
+        str_bytes = string_to_bytes(node.value)
         str_len = len(str_bytes)
         str_condition = ""
 
-        i = 0
-        for ch in node.value:
-            if ord(ch) < 128:
-                str_condition += f"   && this->src[this->position + {i}] == '{escape_string(ch)}'\n"
-                i += 1
+        for i, b in enumerate(str_bytes):
+            if b < 128:
+                str_condition += f"   && this->src[this->position + {i}] == '{escape_string(chr(b))}'\n"
             else:
-                str_condition += f"   && this->src[this->position + {i}] == '\\x{ch.encode()[0]:x}' // {escape_string(ch)}\n"
-                for b_i, b in enumerate(ch.encode()[1:], 1):
-                    str_condition += f"   && this->src[this->position + {b_i + i}] == '\\x{b:x}'\n"
-                i += len(ch.encode())
+                str_condition += f"   && this->src[this->position + {i}] == '\\x{b:x}'\n"
 
         if node.ctx.lookahead:
             if node.ctx.lookahead_positive:

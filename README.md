@@ -115,6 +115,20 @@ Consists of the following element:
 ```
 Rule = "string"
 ```
+Escape sequences are also supported:
+
+| Escape sequence | Hex value in ASCII | Description |
+| :-------------: | :----------------: | ----------- |
+|     `\a`        |        07          |             |
+|     `\b`        |        08          |             |
+|     `\f`        |        0C          |             |
+|     `\n`        |        0A          |             |
+|     `\r`        |        0D          |             |
+|     `\t`        |        09          |             |
+|     `\v`        |        0B          |             |
+|     `\\`        |        5C          | Backslash   |
+|     `\"`        |        22          | Double quotation mark |
+|     `\x`hh      |        any         | hh - hexadecimal number |
 
 - Character class - this is a set of characters. It is enclosed within square brackets, matches only one character from the sequence, and cannot be empty. You can use a hyphen inside a character class to specify a range of characters. [0-9] matches a single digit between 0 and 9.
 ```
