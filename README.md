@@ -291,6 +291,7 @@ Rule<Node*> [0-9]+ { $$ = new Node{}; }
 #### Attributes
 Attributes are specified after the rule name and return type. Attributes start with the - sign.
 + `nomemo` - does not cache the results of the rule.
++ `inline` - inserts expressions directly into the rule. Behaves like a group. The rule cannot have a return type and actions.
 
 ```
 EOF -nomemo = !.
