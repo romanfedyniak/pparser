@@ -1346,7 +1346,7 @@ class CodeGenerator:
                 "    {",
             )
         else:
-            write_lines(self.hpp_file, f"        {return_type} rule__{node.name}_();")
+            write_lines(self.hpp_file, f"        {return_type} rule__{node.name}__body();")
             write_lines(
                 self.cpp_file,
                 f"    {return_type} Parser::rule__{node.name}()",
@@ -1369,7 +1369,7 @@ class CodeGenerator:
                 "            for(;;)",
                 "            {",
                 "                this->position = mark;",
-                f"                auto result = rule__{node.name}_();",
+                f"                auto result = rule__{node.name}__body();",
                 "                auto end_position = this->position;",
                 "                if (end_position <= last_position) break;",
                 f"                this->memoSet({rule_id}, result{return_type.getter}, mark);",
@@ -1387,7 +1387,7 @@ class CodeGenerator:
 
             write_lines(
                 self.cpp_file,
-                f"    {return_type} Parser::rule__{node.name}_()",
+                f"    {return_type} Parser::rule__{node.name}__body()",
                 "    {",
             )
         code = ""
