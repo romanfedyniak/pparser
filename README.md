@@ -98,7 +98,7 @@ Statement = Value # starts from here
 ### Rules
 Syntax:
 ```
-<RuleName> <return type> = <parsing expression sequence> { <C++ code> }  ~{ <C++ code> }
+<RuleName> <return type> <attribute> = <parsing expression sequence> { <C++ code> }  ~{ <C++ code> }
 ```
 - RuleName - this is the name of a rule, and it can consist of letters, digits, and underscores, but it cannot start with a digit. Names are case-sensitive.
 
@@ -286,6 +286,15 @@ Rule =
 If no action is defined with the variable '`$$`', the return type is `bool`. If variable '`$$`' is not defined, the return type is determined by the `%type` directive, or if the directive is not defined, it defaults to `size_t`. Also, the return type can be set manually.
 ```
 Rule<Node*> [0-9]+ { $$ = new Node{}; }
+```
+
+#### Attributes
+Attributes are specified after the rule name and return type. Attributes start with the - sign.
++ `nomemo` - does not cache the results of the rule.
+
+```
+EOF -nomemo = !.
+number<int> -nomemo = num:([1-9][0-9]*) { $$ = std::stoi(num); }
 ```
 
 ## C++ API
