@@ -30,7 +30,7 @@ import sys
 import re
 import os
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 RT = typing.TypeVar('RT')  # return type
 
 
