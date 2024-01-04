@@ -1463,8 +1463,8 @@ class CodeGenerator:
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
-                    if (rule := self.ctx.get_rule_by_name(i.name)).inline:  # type: ignore
-                        group = ParsingExpressionGroupNode(rule.expression_sequences)
+                    if (rule_ := self.ctx.get_rule_by_name(i.name)) and rule_.inline:
+                        group = ParsingExpressionGroupNode(rule_.expression_sequences)
                         group.ctx = i.ctx
                         generated_exprs.append(self.gen_parsing_expr_group(group, next, f"group_{expr_index}_{group_index}"))
                         group_index += 1
@@ -1770,7 +1770,13 @@ class CodeGenerator:
         for i in node.items:
             match i:
                 case ParsingExpressionRuleNameNode():
-                    generated_exprs.append(self.gen_parsing_expr_rule_name(i, next))
+                    if (rule := self.ctx.get_rule_by_name(i.name)) and rule.inline:
+                        group = ParsingExpressionGroupNode(rule.expression_sequences)
+                        group.ctx = i.ctx
+                        generated_exprs.append(self.gen_parsing_expr_group(group, next, f"{prefix}_{expr_index}_{group_index}"))
+                        group_index += 1
+                    else:
+                        generated_exprs.append(self.gen_parsing_expr_rule_name(i, next))
                 case ParsingExpressionStringNode():
                     generated_exprs.append(self.gen_parsing_expr_string(i, next))
                 case ParsingExpressionCharacterClassNode():
