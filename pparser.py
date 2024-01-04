@@ -1560,12 +1560,14 @@ class CodeGenerator:
             code += "   position = __tempMark;\n"
             code += "}\n"
         elif node.ctx.optional:
+            code += "{\n"
             if node.ctx.name:
                 var = f"std::optional<{return_type.raw_type}> {node.ctx.name};"
-                code += "auto __result = "
-            code += f"(rule__{node.name}());\n"
+                code += "    auto __result = "
+            code += f"    (rule__{node.name}());\n"
             if node.ctx.name:
-                code += f"if (__result) {node.ctx.name} = __result{return_type.getter};\n"
+                code += f"    if (__result) {node.ctx.name} = __result{return_type.getter};\n"
+            code += "}\n"
         elif node.ctx.loop:
             if node.ctx.name:
                 var = f"std::vector<{return_type.raw_type}> {node.ctx.name};"
