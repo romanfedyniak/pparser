@@ -38,7 +38,7 @@ class TokenType(enum.Enum):
     COMMENT = re.compile(r"#.*(?=\n)?")
     IDENTIFIER = re.compile(r"[^\d\W]\w*")
     EQUAL = re.compile(r"=")
-    PIPE = re.compile(r"\|")
+    SLASH = re.compile(r"/")
     AMPERSAND = re.compile(r"&")
     EXCLAMATION_MARK = re.compile(r"!")
     STAR = re.compile(r"\*")
@@ -513,7 +513,7 @@ class Parser:
         with self.manager:
             return self.loop(True, self.parsing_expression_named_item_or_item)
         with self.manager:
-            self.match(TokenType.PIPE)
+            self.match(TokenType.SLASH)
             return self.loop(True, self.parsing_expression_named_item_or_item)
         raise ParsingFail
 

@@ -18,18 +18,18 @@
 %type "int"
 
 Value =
-    | value:[0-9.]+ { $$ = std::stoi(value); }
-    | "(" r:Expr ")" { $$ = r; }
+    / value:[0-9.]+ { $$ = std::stoi(value); }
+    / "(" r:Expr ")" { $$ = r; }
 
 Sum =
-    | a:Sum "+" b:Product { $$ = a + b; }
-    | a:Sum "-" b:Product { $$ = a - b; }
-    | a:Product { $$ = a; }
+    / a:Sum "+" b:Product { $$ = a + b; }
+    / a:Sum "-" b:Product { $$ = a - b; }
+    / a:Product { $$ = a; }
 
 Product =
-    | a:Product "*" b:Value { $$ = a * b; }
-    | a:Product "/" b:Value { $$ = a / b; }
-    | a:Value { $$ = a; }
+    / a:Product "*" b:Value { $$ = a * b; }
+    / a:Product "/" b:Value { $$ = a / b; }
+    / a:Value { $$ = a; }
 
 Expr =
-    | value: Sum { $$ = value; }
+    / value: Sum { $$ = value; }

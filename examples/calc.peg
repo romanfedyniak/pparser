@@ -24,10 +24,10 @@
 }
 
 Expression =
-    | n1:Number _ "+" _ n2:Number { $$ = n1 + n2; }
-    | n1:Number _ "-" _ n2:Number { $$ = n1 - n2; }
-    | n1:Number _ "*" _ n2:Number { $$ = n1 * n2; }
-    | n1:Number _ "/" _ n2:Number{
+    / n1:Number _ "+" _ n2:Number { $$ = n1 + n2; }
+    / n1:Number _ "-" _ n2:Number { $$ = n1 - n2; }
+    / n1:Number _ "*" _ n2:Number { $$ = n1 * n2; }
+    / n1:Number _ "/" _ n2:Number{
         if (n2 == 0) parseError("Сannot divide by zero");
         $$ = n1 / n2;
     }

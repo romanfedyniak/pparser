@@ -181,16 +181,16 @@ Rule = "hello" "world"?
 Rule = "1" ("2" "3")
 ```
 
-- `|` - the choice operator. Splits parsing expression sequence into several different sequences. If the sequence on the left succeeds, returns it; if not, moves to the sequence on the right and executes it. If both sequences fail, returns false.
+- `/` - the choice operator. Splits parsing expression sequence into several different sequences. If the sequence on the left succeeds, returns it; if not, moves to the sequence on the right and executes it. If both sequences fail, returns false.
 ```
-Rule = "foo" | "bar" | "baz"
-Rule = [123456789] " " ("+" | "-" | "*" | "/") [123456789]
+Rule = "foo" / "bar" / "baz"
+Rule = [123456789] " " ("+" / "-" / "*" / "/") [123456789]
 
 # You can also write an extra operator at the beginning for aesthetic purposes
 Rule =
-    | "foo"
-    | "bar"
-    | "baz"
+    / "foo"
+    / "bar"
+    / "baz"
 ```
 
 #### Action
@@ -258,10 +258,10 @@ Each parsing expression has its own C++ return type, which also depends on the o
     + .? - `std::optional<std::string>`
     + &. - `std::string`
 + Group - returns a string consisting of matches within a group
-    + ("1" | "2") - `std::string`
-    + ("1" | "2")+ or ("1" | "2")* - `std::string`
-    + ("1" | "2")? - `std::optional<std::string>`
-    + &("1" | "2") - `std::string`
+    + ("1" / "2") - `std::string`
+    + ("1" / "2")+ or ("1" / "2")* - `std::string`
+    + ("1" / "2")? - `std::optional<std::string>`
+    + &("1" / "2") - `std::string`
 + Another rule
     + Rule - `the type returned by the invoked rule`
     + Rule+ or Rule* - `std::vector<the type returned by the invoked rule>`
@@ -273,15 +273,15 @@ The return type of a rule is the return type of the parsing expression sequences
 ```
 # correct, all sequences return bool
 Rule =
-    | "1"
-    | "2"
-    | "3"
+    / "1"
+    / "2"
+    / "3"
 
 # incorrect, the return types of the sequences are different
 Rule =
-    | "1"
-    | "2"
-    | n:"3" { $$=std::stoi(n) }
+    / "1"
+    / "2"
+    / n:"3" { $$=std::stoi(n) }
 ```
 If no action is defined with the variable '`$$`', the return type is `bool`. If variable '`$$`' is not defined, the return type is determined by the `%type` directive, or if the directive is not defined, it defaults to `size_t`. Also, the return type can be set manually.
 ```
