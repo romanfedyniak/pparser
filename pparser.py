@@ -30,7 +30,7 @@ import sys
 import re
 import os
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 RT = typing.TypeVar('RT')  # return type
 
 
@@ -323,6 +323,7 @@ def escape_string(string: str) -> str:
         "\t": "t",
         "\v": "v",
         "\\": "\\",
+        "'": "\'",
     }
     new_string = ""
     for ch in string:
