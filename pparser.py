@@ -136,8 +136,10 @@ class Tokenizer:
         open = 1
         self.pos += 1
         while self.pos < len(self.src):
-            if self.peek() == open_char: open += 1
-            elif self.peek() == close_char: open -= 1
+            if self.peek() == open_char:
+                open += 1
+            elif self.peek() == close_char:
+                open -= 1
             if open == 0:
                 end_pos = self.pos
                 self.pos = mark
@@ -176,6 +178,7 @@ class Tokenizer:
 
 TNode = typing.TypeVar("TNode", bound="Node")
 
+
 @dataclass(kw_only=True)
 class Node():
     line: int = 0
@@ -185,6 +188,7 @@ class Node():
         self.line = start_token.line
         self.col = start_token.col
         return self
+
 
 @dataclass
 class BlockStatementNode(Node):
@@ -534,7 +538,8 @@ class Parser:
                 action.value if action else None,
                 error_action.value if error_action else None,
             )
-            if action: node.position_vars.update(re.findall(r"\$([1-9][0-9]*)", action.value))
+            if action:
+                node.position_vars.update(re.findall(r"\$([1-9][0-9]*)", action.value))
             node.line = parsing_expression[0].line
             node.col = parsing_expression[0].col
             return node
@@ -781,9 +786,9 @@ class LeftRecursiveAnalyzer:
 
     def is_parsing_expr_consume_zero(self, expr: ParsingExpressionNode) -> bool:
         if expr.ctx.optional \
-            or expr.ctx.lookahead \
-            or expr.ctx.loop and not expr.ctx.loop_nonempty \
-            or isinstance(expr, ParsingExpressionRuleNameNode) and self.is_rule_consume_zero(expr.name):
+                or expr.ctx.lookahead \
+                or expr.ctx.loop and not expr.ctx.loop_nonempty \
+                or isinstance(expr, ParsingExpressionRuleNameNode) and self.is_rule_consume_zero(expr.name):
             return True
         return False
 
@@ -795,7 +800,8 @@ class LeftRecursiveAnalyzer:
                 if not self.is_parsing_expr_consume_zero(item):
                     zero_consume = False
                     break
-            if zero_consume: return True
+            if zero_consume:
+                return True
         return False
 
 
@@ -864,6 +870,7 @@ class StaticAnalyzer:
 
     def unused_rules(self):
         checked_rules = []
+
         def group_traversal(group: ParsingExpressionGroupNode) -> set[str]:
             rules = set()
             for sequence in group.parsing_expression:
@@ -924,10 +931,10 @@ class StaticAnalyzer:
                 if is_rule_type_specified:
                     if parsing_expression_sequence.action is None:
                         self.error(f"In the '{rule.name}' rule, the return type is defined, but the action not specified",
-                                    parsing_expression_sequence)
+                                   parsing_expression_sequence)
                     elif "$$" not in parsing_expression_sequence.action:
                         self.error(f"In the '{rule.name}' rule, the return type is defined, but '$$' variable in the action is not",
-                                    parsing_expression_sequence)
+                                   parsing_expression_sequence)
 
     def same_var_names_in_parsing_expr_sequence(self):
         error_message = "In the '{}' rule, variable '{}' is declared multiple times"
@@ -952,7 +959,7 @@ class StaticAnalyzer:
                     if isinstance(group := item, ParsingExpressionGroupNode):
                         if group.ctx.loop and len(self.get_vars_from_group(group)):
                             self.error(f"In the '{rule.name}' rule, the group uses variables inside itself"
-                                        " and repetitions operators simultaneously", group)
+                                       " and repetitions operators simultaneously", group)
 
     def lookahead_false_assigned_to_var(self):
         for rule in self.ctx.get_rules():
@@ -960,7 +967,7 @@ class StaticAnalyzer:
                 for item in parsing_expression_sequence.items:
                     if item.ctx.lookahead and not item.ctx.lookahead_positive and item.ctx.name:
                         self.error(f"In the '{rule.name}' rule, a parsing expression with the '!' operator"
-                                    " cannot be assigned to a variable", item)
+                                   " cannot be assigned to a variable", item)
 
     def string_assigned_to_var(self):
         for rule in self.ctx.get_rules():
@@ -970,7 +977,7 @@ class StaticAnalyzer:
                         if string.ctx.name:
                             if string.ctx.lookahead:
                                 self.error(f"In the '{rule.name}' rule, a string with the '&' operator"
-                                            " cannot be assigned to a variable", string)
+                                           " cannot be assigned to a variable", string)
                             if not string.ctx.loop and not string.ctx.optional:
                                 self.error(f"In the '{rule.name}' rule, simple string cannot be assigned to a variable", string)
 
@@ -1003,16 +1010,16 @@ class StaticAnalyzer:
                                 )
                                 if from_ == to:
                                     self.error(error_message.format("the first and second characters in the range are the same"),
-                                                character_class)
+                                               character_class)
                                 elif ord(from_) > ord(to):
                                     self.error(error_message.format("the first character is 'greater' than the second in a range"),
-                                                character_class)
+                                               character_class)
                                 i += 2
                                 ranges.append((from_, to))
                             else:
                                 if ch in characters:
                                     self.error(f"In the '{rule.name}' rule, the character class has the same characters: {escape_string(ch)}",
-                                                character_class)
+                                               character_class)
                                 characters.append(ch)
                             i += 1
 
@@ -1402,7 +1409,7 @@ class CodeGenerator:
                 "                if (end_position <= last_position) break;",
                 f"                this->memoSet({rule_id}, result{return_type.getter}, mark);",
                 f"                last_result = result{return_type.getter};",
-                f"                last_position = end_position;",
+                "                last_position = end_position;",
                 "            }",
                 "",
                 f"            if (last_position == mark) return {return_type.null};",
@@ -1421,7 +1428,7 @@ class CodeGenerator:
         code = ""
         if not node.is_left_recursive and node.memo:
             code += f"auto __memoized = this->memoGet({rule_id});\n"
-            code += f"if (__memoized.has_value())\n"
+            code += "if (__memoized.has_value())\n"
             code += "{\n"
             code += "    auto& [__memoized_value, __memoized_position] = __memoized.value();\n"
             code += "    this->position = __memoized_position;\n"
@@ -1439,7 +1446,8 @@ class CodeGenerator:
             code += "\n"
         self.cpp_file.write(add_indent(code, 8))
 
-        write_lines(self.cpp_file,
+        write_lines(
+            self.cpp_file,
             "    FAIL:",
             "        this->position = __mark;",
         )
@@ -1531,7 +1539,7 @@ class CodeGenerator:
         if node.action is None or "$$" not in node.action:
             code += "    goto SUCCESS;\n"
         if node.error_action:
-            code +="\n"
+            code += "\n"
             code += f"{next}:\n"
             code += "    { // error action\n"
             code += set_indent(node.error_action, 8)
