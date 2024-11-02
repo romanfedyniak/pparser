@@ -30,7 +30,7 @@ import sys
 import re
 import os
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 RT = typing.TypeVar('RT')  # return type
 
 
@@ -711,6 +711,9 @@ class CppType:
             return f"std::optional<{self.raw_type}>"
         return self.raw_type
 
+    def is_bool(self) -> bool:
+        return self.raw_type == "bool"
+
     @property
     def null(self) -> str:
         if self.is_optional:
@@ -1381,7 +1384,10 @@ class CodeGenerator:
                 "    {",
             )
         else:
-            write_lines(self.hpp_file, f"        {return_type} rule__{node.name}__body();")
+            if return_type.is_bool():
+                write_lines(self.hpp_file, f"        {return_type} rule__{node.name}__body();")
+            else:
+                write_lines(self.hpp_file, f"        std::function<{return_type}(void)> rule__{node.name}__body();")
             write_lines(
                 self.cpp_file,
                 f"    {return_type} Parser::rule__{node.name}()",
@@ -1407,8 +1413,8 @@ class CodeGenerator:
                 f"                auto result = rule__{node.name}__body();",
                 "                auto end_position = this->position;",
                 "                if (end_position <= last_position) break;",
-                f"                this->memoSet({rule_id}, result{return_type.getter}, mark);",
-                f"                last_result = result{return_type.getter};",
+                f"                last_result = result{'' if return_type.is_bool() else '()'}{return_type.getter};",
+                f"                this->memoSet({rule_id}, last_result, mark);",
                 "                last_position = end_position;",
                 "            }",
                 "",
@@ -1420,11 +1426,18 @@ class CodeGenerator:
                 "",
             )
 
-            write_lines(
-                self.cpp_file,
-                f"    {return_type} Parser::rule__{node.name}__body()",
-                "    {",
-            )
+            if return_type.is_bool():
+                write_lines(
+                    self.cpp_file,
+                    f"    {return_type} Parser::rule__{node.name}__body()",
+                    "    {",
+                )
+            else:
+                write_lines(
+                    self.cpp_file,
+                    f"    std::function<{return_type}(void)> Parser::rule__{node.name}__body()",
+                    "    {",
+                )
         code = ""
         if not node.is_left_recursive and node.memo:
             code += f"auto __memoized = this->memoGet({rule_id});\n"
@@ -1454,7 +1467,8 @@ class CodeGenerator:
 
         if not node.is_left_recursive and node.memo:
             write_lines(self.cpp_file, f"        this->memoSet({rule_id}, {{}}, __mark);")
-        write_lines(self.cpp_file, f"        return {return_type.null};")
+        empty_std_function = "{}"
+        write_lines(self.cpp_file, f"        return {return_type.null if return_type.is_bool() else empty_std_function};")
         if not return_type.is_optional:
             write_lines(self.cpp_file, "    SUCCESS:")
             if not node.is_left_recursive and node.memo:
@@ -1519,23 +1533,31 @@ class CodeGenerator:
             if save_pos:
                 code += f"    __token_pos_{i}.endLine = this->getLineFromPosition(this->position);\n"
                 code += f"    __token_pos_{i}.endCol = this->getColFromPosition(this->position, __token_pos_{i}.endLine);\n\n"
-        if action_code := node.action:
-            code += "    { // action\n"
+        action_code = ""
+        if user_action_code := node.action:
+            action_code += "    { // action\n"
             for var in node.position_vars:
-                if f"${var}" in action_code:
-                    action_code = action_code.replace(f"${var}", f"__token_pos_{var}")
+                if f"${var}" in user_action_code:
+                    user_action_code = user_action_code.replace(f"${var}", f"__token_pos_{var}")
             if "$$" in node.action:
-                code += f"        {return_type.raw_type} __rule_result;\n"
-                action_code = action_code.replace("$$", "__rule_result")
-                code += set_indent(action_code, 8)
-                code += "\n"
+                action_code += f"        {return_type.raw_type} __rule_result;\n"
+                user_action_code = user_action_code.replace("$$", "__rule_result")
+                action_code += set_indent(user_action_code, 8)
+                action_code += "\n"
                 if not rule.is_left_recursive and rule.memo:
-                    code += f"        this->memoSet({rule_id}, __rule_result, __mark);\n"
-                code += "        return __rule_result;\n"
+                    action_code += f"        this->memoSet({rule_id}, __rule_result, __mark);\n"
+                action_code += "        return __rule_result;\n"
             else:
+                action_code += set_indent(user_action_code, 8)
+                action_code += "\n"
+            action_code += "    } // end of action\n"
+
+            if rule.is_left_recursive and not return_type.is_bool():
+                code += f"    return [=]() -> {return_type} {{\n"
                 code += set_indent(action_code, 8)
-                code += "\n"
-            code += "    } // end of action\n"
+                code += "    };\n"
+            else:
+                code += action_code
         if node.action is None or "$$" not in node.action:
             code += "    goto SUCCESS;\n"
         if node.error_action:
